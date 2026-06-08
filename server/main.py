@@ -122,9 +122,10 @@ class AddAccountRequest(BaseModel):
 
 @app.post("/accounts", dependencies=[Depends(verify_api_key)])
 async def add_account(req: AddAccountRequest):
-    # Ensure it's valid, either snake_case or camelCase
-    has_access = "access_token" in req.auth_json or "accessToken" in req.auth_json
-    has_refresh = "refresh_token" in req.auth_json or "refreshToken" in req.auth_json
+    # Ensure it's valid, checking both flat and nested 'tokens' structure
+    auth = req.auth_json
+    has_access = "access_token" in auth or "accessToken" in auth or ("tokens" in auth and "access_token" in auth["tokens"])
+    has_refresh = "refresh_token" in auth or "refreshToken" in auth or ("tokens" in auth and "refresh_token" in auth["tokens"])
     if not has_access or not has_refresh:
         raise HTTPException(status_code=400, detail="Invalid auth.json format")
         

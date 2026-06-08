@@ -32,7 +32,7 @@ export async function runClientHeartbeat(auth: AuthJson): Promise<QuotaInfo> {
     const axiosConfig: any = {
         timeout: 10000,
         headers: {
-            'Authorization': `Bearer ${auth.accessToken || auth.access_token}`,
+            'Authorization': `Bearer ${auth.accessToken || auth.access_token || (auth.tokens && auth.tokens.access_token)}`,
             'Content-Type': 'application/json'
         }
     };

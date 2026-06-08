@@ -7,6 +7,11 @@ export interface AuthJson {
     refreshToken?: string;
     access_token?: string;
     refresh_token?: string;
+    tokens?: {
+        access_token?: string;
+        refresh_token?: string;
+        [key: string]: any;
+    };
     expiresAt?: number;
     expires_in?: number;
     userId?: string;

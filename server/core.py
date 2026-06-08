@@ -4,6 +4,7 @@ import time
 import os
 from pathlib import Path
 from typing import Dict, Any
+from datetime import datetime, timezone
 
 class InvalidGrantError(Exception): pass
 class NetworkError(Exception): pass
@@ -33,11 +34,19 @@ def save_auth(account_id: str, auth_data: Dict[str, Any]):
     path.write_text(json.dumps(auth_data, indent=2), encoding="utf-8")
 
     # Check if access token is expired or about to expire in 60 seconds
-    expires_at = auth_data.get("expiresAt") or auth_data.get("expires_in") or auth_data.get("last_refresh") or 0
+    expires_at = auth_data.get("expiresAt") or auth_data.get("expires_in")
+    if not isinstance(expires_at, (int, float)):
+        return True  # Force refresh if no numeric expiration found
     return time.time() + 60 >= expires_at
 
 async def refresh_token(account_id: str) -> Dict[str, Any]:
     auth = load_auth(account_id)
+
+    rt = auth.get("refresh_token") or auth.get("refreshToken")
+    if not rt and "tokens" in auth:
+        rt = auth["tokens"].get("refresh_token")
+    if not rt:
+        raise InvalidGrantError("No refresh_token found in auth data")
 
     try:
         async with httpx.AsyncClient() as client:
@@ -45,7 +54,7 @@ async def refresh_token(account_id: str) -> Dict[str, Any]:
                 "https://auth.openai.com/oauth/token",
                 json={
                     "grant_type": "refresh_token",
-                    "refresh_token": auth.get("refresh_token") or auth.get("refreshToken"),
+                    "refresh_token": rt,
                     "client_id": CLIENT_ID
                 },
                 timeout=10.0
@@ -64,14 +73,19 @@ async def refresh_token(account_id: str) -> Dict[str, Any]:
     auth["access_token"] = data["access_token"]
     # Provide camelCase too just in case older clients expect it
     auth["accessToken"] = data["access_token"]
+    if "tokens" in auth:
+        auth["tokens"]["access_token"] = data["access_token"]
     
     # Rotation: check if a new refresh token is provided
     if "refresh_token" in data:
         auth["refresh_token"] = data["refresh_token"]
         auth["refreshToken"] = data["refresh_token"]
+        if "tokens" in auth:
+            auth["tokens"]["refresh_token"] = data["refresh_token"]
         
     auth["expiresAt"] = time.time() + data.get("expires_in", 3600)
     auth["expires_in"] = time.time() + data.get("expires_in", 3600)
+    auth["last_refresh"] = datetime.now(timezone.utc).isoformat()
 
     save_auth(account_id, auth)
     return auth
