@@ -1,0 +1,83 @@
+import httpx
+import json
+import time
+import os
+from pathlib import Path
+from typing import Dict, Any
+
+class InvalidGrantError(Exception): pass
+class NetworkError(Exception): pass
+
+# Base path for storing auth.json files
+ACCOUNTS_DIR = Path(__file__).parent.parent / "vault" / "accounts"
+ACCOUNTS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Replace with actual client ID if different, but usually the CLI uses this one
+OPENAI_OAUTH_CLIENT_ID = "1a314b17-72ee-4836-96b0-73f1d8cce4c8" # Typically for OpenAI, we need the correct one or we use a generic string if not specified.
+# In the original codex CLI: "1a314b17-72ee-4836-96b0-73f1d8cce4c8" is sometimes used, but the spec says <OPENAI_OAUTH_CLIENT_ID>
+# We will read it from environment or use a placeholder if not set.
+CLIENT_ID = os.environ.get("OPENAI_OAUTH_CLIENT_ID", "1a314b17-72ee-4836-96b0-73f1d8cce4c8")
+
+def get_auth_path(account_id: str) -> Path:
+    return ACCOUNTS_DIR / account_id / "auth.json"
+
+def load_auth(account_id: str) -> Dict[str, Any]:
+    path = get_auth_path(account_id)
+    if not path.exists():
+        raise FileNotFoundError(f"Auth file not found for account: {account_id}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+def save_auth(account_id: str, auth_data: Dict[str, Any]):
+    path = get_auth_path(account_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(auth_data, indent=2), encoding="utf-8")
+
+    # Check if access token is expired or about to expire in 60 seconds
+    expires_at = auth_data.get("expiresAt") or auth_data.get("expires_in") or auth_data.get("last_refresh") or 0
+    return time.time() + 60 >= expires_at
+
+async def refresh_token(account_id: str) -> Dict[str, Any]:
+    auth = load_auth(account_id)
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://auth.openai.com/oauth/token",
+                json={
+                    "grant_type": "refresh_token",
+                    "refresh_token": auth.get("refresh_token") or auth.get("refreshToken"),
+                    "client_id": CLIENT_ID
+                },
+                timeout=10.0
+            )
+    except httpx.TimeoutException:
+        raise NetworkError("OAuth 端点超时，非封号，稍后重试")
+    except httpx.RequestError as e:
+        raise NetworkError(f"网络错误：{e}")
+
+    if resp.status_code == 400 and "invalid_grant" in resp.text:
+        raise InvalidGrantError("refresh_token 已失效，账号被封或长期未用")
+    
+    if resp.status_code != 200:
+        raise NetworkError(f"OAuth endpoint error: {resp.status_code} - {resp.text}")
+
+    auth["access_token"] = data["access_token"]
+    # Provide camelCase too just in case older clients expect it
+    auth["accessToken"] = data["access_token"]
+    
+    # Rotation: check if a new refresh token is provided
+    if "refresh_token" in data:
+        auth["refresh_token"] = data["refresh_token"]
+        auth["refreshToken"] = data["refresh_token"]
+        
+    auth["expiresAt"] = time.time() + data.get("expires_in", 3600)
+    auth["expires_in"] = time.time() + data.get("expires_in", 3600)
+
+    save_auth(account_id, auth)
+    return auth
+
+async def ensure_fresh_token(account_id: str) -> Dict[str, Any]:
+    auth = load_auth(account_id)
+    if is_expired(auth):
+        auth = await refresh_token(account_id)
+    return auth

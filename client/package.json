@@ -1,0 +1,62 @@
+{
+  "name": "codex-account-pool",
+  "displayName": "Codex Account Pool",
+  "description": "Client for Codex Account Pool system",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codexPool.returnAccount",
+        "title": "Codex Pool: Return Account"
+      },
+      {
+        "command": "codexPool.showPanel",
+        "title": "Codex Pool: Show Status"
+      }
+    ],
+    "configuration": {
+      "title": "Codex Account Pool",
+      "properties": {
+        "codexPool.vaultUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8000",
+          "description": "Vault Server URL"
+        },
+        "codexPool.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API Key for Vault authentication"
+        },
+        "codexPool.proxy": {
+          "type": "string",
+          "default": "",
+          "description": "Proxy URL for OpenAI API checks (e.g. http://127.0.0.1:7890)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.1.3"
+  },
+  "dependencies": {
+    "axios": "^1.4.0",
+    "https-proxy-agent": "^7.0.0"
+  }
+}
