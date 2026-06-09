@@ -5,6 +5,9 @@ import os
 from pathlib import Path
 from typing import Dict, Any
 from datetime import datetime, timezone
+import logging
+
+logger = logging.getLogger("vault.core")
 
 class InvalidGrantError(Exception): pass
 class NetworkError(Exception): pass
@@ -46,7 +49,10 @@ async def refresh_token(account_id: str) -> Dict[str, Any]:
     if not rt and "tokens" in auth:
         rt = auth["tokens"].get("refresh_token")
     if not rt:
+        logger.error(f"No refresh_token found in auth data for account {account_id}")
         raise InvalidGrantError("No refresh_token found in auth data")
+
+    logger.debug(f"Attempting to refresh token for account {account_id}")
 
     try:
         async with httpx.AsyncClient() as client:
@@ -60,16 +66,22 @@ async def refresh_token(account_id: str) -> Dict[str, Any]:
                 timeout=10.0
             )
     except httpx.TimeoutException:
+        logger.warning(f"Timeout while refreshing token for {account_id}")
         raise NetworkError("OAuth 端点超时，非封号，稍后重试")
     except httpx.RequestError as e:
+        logger.error(f"Network error refreshing token for {account_id}: {e}")
         raise NetworkError(f"网络错误：{e}")
 
     if resp.status_code == 400 and "invalid_grant" in resp.text:
+        logger.warning(f"invalid_grant received for account {account_id}")
         raise InvalidGrantError("refresh_token 已失效，账号被封或长期未用")
     
     if resp.status_code != 200:
+        logger.error(f"OAuth endpoint error for {account_id}: {resp.status_code} - {resp.text}")
         raise NetworkError(f"OAuth endpoint error: {resp.status_code} - {resp.text}")
 
+    logger.info(f"Successfully refreshed token for account {account_id}")
+    data = resp.json()
     auth["access_token"] = data["access_token"]
     # Provide camelCase too just in case older clients expect it
     auth["accessToken"] = data["access_token"]

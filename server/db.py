@@ -3,6 +3,9 @@ from typing import List, Optional, Dict, Any
 import json
 import threading
 from pathlib import Path
+import logging
+
+logger = logging.getLogger("vault.db")
 
 DB_PATH = Path(__file__).parent / "data.db"
 # Ensure the data directory exists
@@ -58,6 +61,7 @@ def insert_account(account_id: str):
                 VALUES (?, 'READY', 1)
             """, (account_id,))
             conn.commit()
+            logger.debug(f"Inserted or ignored account: {account_id}")
 
 def delete_account(account_id: str):
     with db_lock:
@@ -75,6 +79,7 @@ def update_account(account_id: str, updates: Dict[str, Any]):
         with get_connection() as conn:
             conn.execute(f"UPDATE accounts SET {set_clause} WHERE account_id = ?", values)
             conn.commit()
+            logger.debug(f"Updated account {account_id}: {updates}")
 
 def pick_best_ready_account() -> Optional[sqlite3.Row]:
     """Returns the ready account with the most remaining requests."""

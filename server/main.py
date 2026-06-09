@@ -4,6 +4,13 @@ from pydantic import BaseModel
 from typing import Dict, Any, List
 from datetime import datetime, timezone
 import os
+import logging
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger("vault.main")
 
 from db import (
     get_account, list_accounts, insert_account, delete_account,
@@ -28,6 +35,7 @@ def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)
 
 @app.on_event("startup")
 async def startup_event():
+    logger.info("Starting up Vault server...")
     start_scheduler()
 
 @app.get("/status", dependencies=[Depends(verify_api_key)])
@@ -50,22 +58,26 @@ async def checkout():
     with db_lock:
         best_acc = pick_best_ready_account()
         if not best_acc:
+            logger.warning("Checkout requested but no READY accounts available.")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="No accounts available currently."
             )
         
         account_id = best_acc["account_id"]
+        logger.info(f"Checking out account {account_id}")
         
         try:
             auth_data = await ensure_fresh_token(account_id)
         except InvalidGrantError:
+            logger.warning(f"Account {account_id} refresh_token invalid during checkout")
             await remove_account(account_id, "refresh_token invalid during checkout")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Selected account became invalid. Please try again."
             )
         except Exception as e:
+            logger.error(f"Error refreshing token for {account_id} during checkout: {e}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error refreshing token: {str(e)}"
@@ -90,8 +102,10 @@ class CheckinRequest(BaseModel):
 
 @app.post("/checkin/{account_id}", dependencies=[Depends(verify_api_key)])
 async def checkin(account_id: str, req: CheckinRequest):
+    logger.info(f"Checking in account {account_id}")
     acc = get_account(account_id)
     if not acc:
+        logger.warning(f"Checkin failed: Account {account_id} not found")
         raise HTTPException(status_code=404, detail="Account not found")
         
     # Save the auth_json provided by client
@@ -102,7 +116,7 @@ async def checkin(account_id: str, req: CheckinRequest):
         await ensure_fresh_token(account_id)
     except Exception as e:
         # If it fails, we still keep it, just log it. Client returned it anyway.
-        print(f"Warning: could not refresh token on checkin for {account_id}: {e}")
+        logger.warning(f"Could not refresh token on checkin for {account_id}: {e}")
         
     update_account(account_id, {
         "status": "READY",
@@ -113,6 +127,7 @@ async def checkin(account_id: str, req: CheckinRequest):
 
 @app.delete("/accounts/{account_id}", dependencies=[Depends(verify_api_key)])
 async def delete_acc(account_id: str):
+    logger.info(f"Deleting account {account_id} via API")
     await remove_account(account_id, "Deleted via API")
     return {"status": "ok"}
 
@@ -127,8 +142,10 @@ async def add_account(req: AddAccountRequest):
     has_access = "access_token" in auth or "accessToken" in auth or ("tokens" in auth and "access_token" in auth["tokens"])
     has_refresh = "refresh_token" in auth or "refreshToken" in auth or ("tokens" in auth and "refresh_token" in auth["tokens"])
     if not has_access or not has_refresh:
+        logger.warning(f"Failed to add account {req.account_id}: Invalid auth.json format")
         raise HTTPException(status_code=400, detail="Invalid auth.json format")
         
     save_auth(req.account_id, req.auth_json)
     insert_account(req.account_id)
+    logger.info(f"Successfully added account {req.account_id}")
     return {"status": "ok", "account_id": req.account_id}
