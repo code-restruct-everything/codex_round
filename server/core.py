@@ -16,11 +16,10 @@ class NetworkError(Exception): pass
 ACCOUNTS_DIR = Path(__file__).parent.parent / "vault" / "accounts"
 ACCOUNTS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Replace with actual client ID if different, but usually the CLI uses this one
-OPENAI_OAUTH_CLIENT_ID = "1a314b17-72ee-4836-96b0-73f1d8cce4c8" # Typically for OpenAI, we need the correct one or we use a generic string if not specified.
-# In the original codex CLI: "1a314b17-72ee-4836-96b0-73f1d8cce4c8" is sometimes used, but the spec says <OPENAI_OAUTH_CLIENT_ID>
-# We will read it from environment or use a placeholder if not set.
-CLIENT_ID = os.environ.get("OPENAI_OAUTH_CLIENT_ID", "1a314b17-72ee-4836-96b0-73f1d8cce4c8")
+# The correct OAuth client_id used by the OpenAI Codex desktop/CLI app.
+# Extracted from the official codex.exe binary: app_EMoamEEZ73f0CkXaXp7hrann
+# The old UUID (1a314b17-72ee-4836-96b0-73f1d8cce4c8) is invalid and causes 401 invalid_client errors.
+CLIENT_ID = os.environ.get("OPENAI_OAUTH_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann")
 
 def get_auth_path(account_id: str) -> Path:
     return ACCOUNTS_DIR / account_id / "auth.json"
