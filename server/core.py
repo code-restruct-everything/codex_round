@@ -72,10 +72,14 @@ async def refresh_token(account_id: str) -> Dict[str, Any]:
         logger.error(f"Network error refreshing token for {account_id}: {e}")
         raise NetworkError(f"网络错误：{e}")
 
-    if resp.status_code == 400 and "invalid_grant" in resp.text:
-        logger.warning(f"invalid_grant received for account {account_id}")
-        raise InvalidGrantError("refresh_token 已失效，账号被封或长期未用")
-    
+    if resp.status_code == 400:
+        body = resp.text
+        # 以下错误码均表示 session/token 已永久失效，无法通过重试恢复，需移除账号
+        FATAL_CODES = ("invalid_grant", "app_session_terminated")
+        if any(code in body for code in FATAL_CODES):
+            logger.warning(f"Fatal OAuth error for account {account_id}: {body[:200]}")
+            raise InvalidGrantError(f"session 已终止或 refresh_token 失效，需重新登录")
+
     if resp.status_code != 200:
         logger.error(f"OAuth endpoint error for {account_id}: {resp.status_code} - {resp.text}")
         raise NetworkError(f"OAuth endpoint error: {resp.status_code} - {resp.text}")
