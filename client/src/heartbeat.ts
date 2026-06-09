@@ -43,31 +43,30 @@ export async function runClientHeartbeat(auth: AuthJson): Promise<QuotaInfo> {
     }
 
     try {
-        const response = await axios.post(
-            'https://api.openai.com/v1/responses',
-            {
-                model: 'gpt-5.5',
-                input: 'hi',
-                max_output_tokens: 1
-            },
+        // 探活用 chatgpt.com/backend-api/me，该端点接受 OAuth access_token
+        // api.openai.com 要求 sk-xxx API Key，不能用 OAuth token探活
+        const response = await axios.get(
+            'https://chatgpt.com/backend-api/me',
             axiosConfig
         );
 
+        // 200 = 账号正常；配额信息由 checkout/checkin 维护，heartbeat 不采集
         return {
-            banned: false,
-            limit_requests: parseInt(response.headers['x-ratelimit-limit-requests'] || '-1', 10),
-            remaining_requests: parseInt(response.headers['x-ratelimit-remaining-requests'] || '-1', 10),
-            reset_requests: response.headers['x-ratelimit-reset-requests'] || '',
-            limit_tokens: parseInt(response.headers['x-ratelimit-limit-tokens'] || '-1', 10),
-            remaining_tokens: parseInt(response.headers['x-ratelimit-remaining-tokens'] || '-1', 10)
+            banned: false
         };
 
     } catch (e: any) {
+        if (e.response && e.response.status === 403) {
+            // 403 = 账号被封禁/暂停，真正的封号信号
+            return { banned: true, reason: 'account_banned_403' };
+        }
         if (e.response && e.response.status === 401) {
-            return { banned: true };
+            // 401 不代表封号，可能是 token 过期或未同步
+            // skipped = true 表示这轮不做任何处理，保持现有犰态
+            console.warn('Heartbeat got 401 from /me, token may be stale, will retry on next cycle');
+            return { banned: false, skipped: true, reason: 'token_stale_401' };
         }
         console.error('Heartbeat request failed:', e.message);
-        // On network error, we don't assume banned, just return current state loosely
         return { banned: false, skipped: true, reason: 'network_error' };
     }
 }

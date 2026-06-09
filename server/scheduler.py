@@ -26,45 +26,40 @@ async def heartbeat_account(account_id: str):
         logger.error(f"Error refreshing token for {account_id}: {e}")
         return
 
-    # Call OpenAI API to check quota
+    # 探活：用 chatgpt.com/backend-api/me，该端点接受 OAuth access_token
+    # 注意：api.openai.com 要求的是 sk-xxx API Key，不接受 OAuth token，不能用于探活
     try:
         async with httpx.AsyncClient() as client:
             access_t = auth.get("access_token") or auth.get("accessToken") or (auth.get("tokens") or {}).get("access_token")
-            resp = await client.post(
-                "https://api.openai.com/v1/responses",
+            resp = await client.get(
+                "https://chatgpt.com/backend-api/me",
                 headers={"Authorization": f"Bearer {access_t}"},
-                json={"model": "gpt-5.5", "input": "hi", "max_output_tokens": 1},
                 timeout=10.0
             )
     except Exception as e:
         logger.error(f"Network error during heartbeat for {account_id}: {e}")
         return
 
-    if resp.status_code == 401:
-        await remove_account(account_id, reason="account banned")
+    if resp.status_code == 403:
+        # 403 = 账号被封禁/暂停，真正的封号信号
+        await remove_account(account_id, reason="account banned (403 from /me)")
         return
 
-    # Update quota in DB
-    update_data = {
-        "limit_requests": int(resp.headers.get("x-ratelimit-limit-requests", -1)),
-        "remaining_requests": int(resp.headers.get("x-ratelimit-remaining-requests", -1)),
-        "reset_requests": resp.headers.get("x-ratelimit-reset-requests", ""),
-        "limit_tokens": int(resp.headers.get("x-ratelimit-limit-tokens", -1)),
-        "remaining_tokens": int(resp.headers.get("x-ratelimit-remaining-tokens", -1)),
-        "last_heartbeat_at": datetime.now(timezone.utc).isoformat()
-    }
-    
-    # Check if remaining is very low (<30%), if so change to COOLING
-    limit = update_data["limit_requests"]
-    remaining = update_data["remaining_requests"]
-    
-    if limit > 0 and remaining >= 0:
-        ratio = remaining / limit
-        if ratio < 0.3:
-            update_data["status"] = "COOLING"
-            logger.info(f"Account {account_id} quota low ({remaining}/{limit}), switching to COOLING")
+    if resp.status_code == 401:
+        # 401 = token 无效，但我们已经在上面刷新过了
+        # 可能是刷新后的 token 还未同步，或者 session 被踢出
+        # 不立即删号，由下一轮心跳配合 ensure_fresh_token 再判断
+        logger.warning(f"Account {account_id} got 401 from /me after token refresh, will retry next cycle")
+        return
 
-    update_account(account_id, update_data)
+    if resp.status_code != 200:
+        logger.warning(f"Account {account_id} /me returned unexpected status {resp.status_code}, skipping")
+        return
+
+    # 账号正常，更新心跳时间
+    # 配额信息（remaining/limit）由 client 在 checkin 时回传更新，heartbeat 不负责采集
+    logger.debug(f"Account {account_id} heartbeat OK (status 200)")
+    update_account(account_id, {"last_heartbeat_at": datetime.now(timezone.utc).isoformat()})
 
 async def check_all_accounts():
     accounts = list_accounts()
