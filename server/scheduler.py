@@ -29,9 +29,10 @@ async def heartbeat_account(account_id: str):
     # Call OpenAI API to check quota
     try:
         async with httpx.AsyncClient() as client:
+            access_t = auth.get("access_token") or auth.get("accessToken") or (auth.get("tokens") or {}).get("access_token")
             resp = await client.post(
                 "https://api.openai.com/v1/responses",
-                headers={"Authorization": f"Bearer {auth['accessToken']}"},
+                headers={"Authorization": f"Bearer {access_t}"},
                 json={"model": "gpt-5.5", "input": "hi", "max_output_tokens": 1},
                 timeout=10.0
             )
