@@ -36,6 +36,7 @@ def save_auth(account_id: str, auth_data: Dict[str, Any]):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(auth_data, indent=2), encoding="utf-8")
 
+def is_expired(auth_data: Dict[str, Any]) -> bool:
     # Check if access token is expired or about to expire in 60 seconds
     expires_at = auth_data.get("expiresAt") or auth_data.get("expires_in")
     if not isinstance(expires_at, (int, float)):
