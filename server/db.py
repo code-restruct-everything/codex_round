@@ -37,10 +37,37 @@ def init_db():
                     limit_tokens INTEGER DEFAULT -1,
                     remaining_tokens INTEGER DEFAULT -1,
                     reset_requests TEXT,
+                    five_hour_percent_left REAL DEFAULT -1,
+                    five_hour_reset_at TEXT,
+                    weekly_percent_left REAL DEFAULT -1,
+                    weekly_reset_at TEXT,
+                    usage_updated_at TEXT,
+                    usage_source TEXT,
+                    usage_error TEXT,
+                    plan_type TEXT,
+                    rate_limit_reached BOOLEAN DEFAULT 0,
                     last_heartbeat_at TEXT,
                     is_healthy BOOLEAN DEFAULT 1
                 )
             """)
+            existing = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(accounts)").fetchall()
+            }
+            migrations = {
+                "five_hour_percent_left": "REAL DEFAULT -1",
+                "five_hour_reset_at": "TEXT",
+                "weekly_percent_left": "REAL DEFAULT -1",
+                "weekly_reset_at": "TEXT",
+                "usage_updated_at": "TEXT",
+                "usage_source": "TEXT",
+                "usage_error": "TEXT",
+                "plan_type": "TEXT",
+                "rate_limit_reached": "BOOLEAN DEFAULT 0",
+            }
+            for column, definition in migrations.items():
+                if column not in existing:
+                    conn.execute(f"ALTER TABLE accounts ADD COLUMN {column} {definition}")
             conn.commit()
 
 def get_account(account_id: str) -> Optional[sqlite3.Row]:

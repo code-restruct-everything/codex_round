@@ -49,7 +49,11 @@ async function performCheckout() {
             account_id: currentAccountId,
             remaining_requests: result.remaining_requests,
             limit_requests: result.limit_requests,
-            reset_requests: result.reset_requests
+            reset_requests: result.reset_requests,
+            five_hour_percent_left: result.five_hour_percent_left,
+            five_hour_reset_at: result.five_hour_reset_at,
+            weekly_percent_left: result.weekly_percent_left,
+            weekly_reset_at: result.weekly_reset_at
         });
     }
     else {
@@ -74,14 +78,20 @@ async function performHeartbeat() {
         return null;
     }
     if (!quota.skipped) {
+        const { banned, skipped, reason, ...usageUpdate } = quota;
+        await (0, vaultApi_1.updateAccountUsage)(currentAccountId, usageUpdate);
         updateStatusBar({
             account_id: currentAccountId,
             remaining_requests: quota.remaining_requests,
             limit_requests: quota.limit_requests,
-            reset_requests: quota.reset_requests
+            reset_requests: quota.reset_requests,
+            five_hour_percent_left: quota.five_hour_percent_left,
+            five_hour_reset_at: quota.five_hour_reset_at,
+            weekly_percent_left: quota.weekly_percent_left,
+            weekly_reset_at: quota.weekly_reset_at
         });
         // 自动换号逻辑：剩余额度极低
-        if (quota.remaining_requests !== undefined && quota.remaining_requests < 5 && quota.limit_requests !== -1) {
+        if (quota.rate_limit_reached || (quota.remaining_requests !== undefined && quota.remaining_requests < 5 && quota.limit_requests !== -1)) {
             vscode.window.showInformationMessage(`账号 ${currentAccountId} 额度即将耗尽，正在切换...`);
             try {
                 const latestAuth = (0, utils_1.readAuthJson)();
@@ -152,7 +162,18 @@ function updateStatusBar(info) {
         statusBarItem.text = `$(account) Codex Pool: ${info.status}`;
     }
     else {
-        statusBarItem.text = `$(account) ${info.account_id} | ${info.remaining_requests}/${info.limit_requests} req | reset ${info.reset_requests}`;
+        const fiveHour = typeof info.five_hour_percent_left === 'number'
+            ? `5h ${Math.round(info.five_hour_percent_left)}%`
+            : `${info.remaining_requests}/${info.limit_requests} req`;
+        const weekly = typeof info.weekly_percent_left === 'number'
+            ? ` | 7d ${Math.round(info.weekly_percent_left)}%`
+            : '';
+        statusBarItem.text = `$(account) ${info.account_id} | ${fiveHour}${weekly}`;
+        statusBarItem.tooltip = [
+            info.five_hour_reset_at ? `5h reset: ${info.five_hour_reset_at}` : undefined,
+            info.weekly_reset_at ? `7d reset: ${info.weekly_reset_at}` : undefined,
+            info.reset_requests ? `raw reset: ${info.reset_requests}` : undefined
+        ].filter(Boolean).join('\n');
     }
 }
 //# sourceMappingURL=extension.js.map

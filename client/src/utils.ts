@@ -9,12 +9,20 @@ export interface AuthJson {
     refresh_token?: string;
     tokens?: {
         access_token?: string;
+        accessToken?: string;
         refresh_token?: string;
+        refreshToken?: string;
+        account_id?: string;
+        accountId?: string;
         [key: string]: any;
     };
     expiresAt?: number;
     expires_in?: number;
     userId?: string;
+    account_id?: string;
+    accountId?: string;
+    chatgpt_account_id?: string;
+    chatgptAccountId?: string;
     [key: string]: any;
 }
 

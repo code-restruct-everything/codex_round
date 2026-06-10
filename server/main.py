@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 import os
 import logging
@@ -52,6 +52,12 @@ class CheckoutResponse(BaseModel):
     remaining_requests: int
     limit_requests: int
     reset_requests: str
+    five_hour_percent_left: Optional[float] = None
+    five_hour_reset_at: Optional[str] = None
+    weekly_percent_left: Optional[float] = None
+    weekly_reset_at: Optional[str] = None
+    usage_updated_at: Optional[str] = None
+    usage_source: Optional[str] = None
 
 @app.post("/checkout", dependencies=[Depends(verify_api_key)])
 async def checkout():
@@ -94,7 +100,13 @@ async def checkout():
             "auth_json": auth_data,
             "remaining_requests": best_acc["remaining_requests"],
             "limit_requests": best_acc["limit_requests"],
-            "reset_requests": best_acc["reset_requests"] or ""
+            "reset_requests": best_acc["reset_requests"] or "",
+            "five_hour_percent_left": best_acc["five_hour_percent_left"],
+            "five_hour_reset_at": best_acc["five_hour_reset_at"],
+            "weekly_percent_left": best_acc["weekly_percent_left"],
+            "weekly_reset_at": best_acc["weekly_reset_at"],
+            "usage_updated_at": best_acc["usage_updated_at"],
+            "usage_source": best_acc["usage_source"],
         }
 
 class CheckinRequest(BaseModel):
@@ -118,11 +130,57 @@ async def checkin(account_id: str, req: CheckinRequest):
         # If it fails, we still keep it, just log it. Client returned it anyway.
         logger.warning(f"Could not refresh token on checkin for {account_id}: {e}")
         
+    latest_acc = get_account(account_id)
+    next_status = "READY"
+    if latest_acc:
+        limit = latest_acc["limit_requests"]
+        remaining = latest_acc["remaining_requests"]
+        if latest_acc["rate_limit_reached"] or (limit > 0 and remaining >= 0 and (remaining / limit) < 0.3):
+            next_status = "COOLING"
+
     update_account(account_id, {
-        "status": "READY",
+        "status": next_status,
         "returned_at": datetime.now(timezone.utc).isoformat()
     })
     
+    return {"status": "ok"}
+
+class UsageUpdateRequest(BaseModel):
+    remaining_requests: Optional[int] = None
+    limit_requests: Optional[int] = None
+    reset_requests: Optional[str] = None
+    limit_tokens: Optional[int] = None
+    remaining_tokens: Optional[int] = None
+    five_hour_percent_left: Optional[float] = None
+    five_hour_reset_at: Optional[str] = None
+    weekly_percent_left: Optional[float] = None
+    weekly_reset_at: Optional[str] = None
+    usage_updated_at: Optional[str] = None
+    usage_source: Optional[str] = None
+    usage_error: Optional[str] = None
+    plan_type: Optional[str] = None
+    rate_limit_reached: Optional[bool] = None
+
+@app.post("/accounts/{account_id}/usage", dependencies=[Depends(verify_api_key)])
+async def update_usage(account_id: str, req: UsageUpdateRequest):
+    logger.info(f"Updating usage for account {account_id}")
+    acc = get_account(account_id)
+    if not acc:
+        logger.warning(f"Usage update failed: Account {account_id} not found")
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    updates = {}
+    for field, value in req.model_dump(exclude_unset=True).items():
+        if value is not None:
+            updates[field] = value
+
+    if updates and "usage_updated_at" not in updates:
+        updates["usage_updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    if updates.get("rate_limit_reached") or updates.get("remaining_requests") == 0:
+        updates["status"] = "COOLING"
+
+    update_account(account_id, updates)
     return {"status": "ok"}
 
 @app.delete("/accounts/{account_id}", dependencies=[Depends(verify_api_key)])

@@ -23,6 +23,29 @@ export interface CheckoutResult {
     remaining_requests: number;
     limit_requests: number;
     reset_requests: string;
+    five_hour_percent_left?: number;
+    five_hour_reset_at?: string;
+    weekly_percent_left?: number;
+    weekly_reset_at?: string;
+    usage_updated_at?: string;
+    usage_source?: string;
+}
+
+export interface UsageUpdate {
+    remaining_requests?: number;
+    limit_requests?: number;
+    reset_requests?: string;
+    limit_tokens?: number;
+    remaining_tokens?: number;
+    five_hour_percent_left?: number;
+    five_hour_reset_at?: string;
+    weekly_percent_left?: number;
+    weekly_reset_at?: string;
+    usage_updated_at?: string;
+    usage_source?: string;
+    usage_error?: string;
+    plan_type?: string;
+    rate_limit_reached?: boolean;
 }
 
 export async function checkoutAccount(): Promise<CheckoutResult | null> {
@@ -51,6 +74,17 @@ export async function checkinAccount(accountId: string, authJson: AuthJson): Pro
         vscode.window.showErrorMessage(`Codex Pool Checkin Failed: ${e.message}`);
         // We throw so caller can implement exponential backoff
         throw e;
+    }
+}
+
+export async function updateAccountUsage(accountId: string, usage: UsageUpdate): Promise<boolean> {
+    const client = getVaultClient();
+    try {
+        await client.post(`/accounts/${accountId}/usage`, usage);
+        return true;
+    } catch (e: any) {
+        console.error('Usage update failed:', e);
+        return false;
     }
 }
 

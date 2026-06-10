@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.checkoutAccount = checkoutAccount;
 exports.checkinAccount = checkinAccount;
+exports.updateAccountUsage = updateAccountUsage;
 exports.deleteAccount = deleteAccount;
 const axios_1 = require("axios");
 const vscode = require("vscode");
@@ -45,6 +46,17 @@ async function checkinAccount(accountId, authJson) {
         vscode.window.showErrorMessage(`Codex Pool Checkin Failed: ${e.message}`);
         // We throw so caller can implement exponential backoff
         throw e;
+    }
+}
+async function updateAccountUsage(accountId, usage) {
+    const client = getVaultClient();
+    try {
+        await client.post(`/accounts/${accountId}/usage`, usage);
+        return true;
+    }
+    catch (e) {
+        console.error('Usage update failed:', e);
+        return false;
     }
 }
 async function deleteAccount(accountId) {
