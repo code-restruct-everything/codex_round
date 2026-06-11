@@ -47,8 +47,8 @@ async def heartbeat_account(account_id: str):
         return
 
     updates["last_heartbeat_at"] = datetime.now(timezone.utc).isoformat()
-    remaining = updates.get("remaining_requests")
-    limit = updates.get("limit_requests")
+    remaining = updates.get("remaining_pct")
+    limit = updates.get("limit_pct")
     if updates.get("rate_limit_reached") or remaining == 0 or (limit and limit > 0 and remaining is not None and remaining >= 0 and (remaining / limit) < 0.3):
         updates["status"] = "COOLING"
     logger.debug(f"Account {account_id} usage heartbeat OK")
@@ -62,8 +62,8 @@ async def check_all_accounts():
         account_id = acc["account_id"]
         status = acc["status"]
         last_hb_str = acc["last_heartbeat_at"]
-        limit = acc["limit_requests"]
-        remaining = acc["remaining_requests"]
+        limit = acc["limit_pct"]
+        remaining = acc["remaining_pct"]
         
         last_hb = None
         if last_hb_str:
@@ -76,13 +76,15 @@ async def check_all_accounts():
         
         if status == "READY":
             ratio = remaining / limit if limit > 0 else 1.0
-            
+
             should_heartbeat = False
-            if ratio > 0.8 and elapsed_minutes >= 30:
+            if last_hb is None:  # Never heartbeated
+                should_heartbeat = True
+            elif ratio > 0.8 and elapsed_minutes >= 30:
                 should_heartbeat = True
             elif 0.3 <= ratio <= 0.8 and elapsed_minutes >= 15:
                 should_heartbeat = True
-            elif last_hb is None: # Never heartbeated
+            elif ratio < 0.3 and elapsed_minutes >= 5:
                 should_heartbeat = True
                 
             if should_heartbeat:
@@ -98,8 +100,8 @@ async def check_all_accounts():
                 # Check if it recovered
                 updated_acc = get_account(account_id)
                 if updated_acc:
-                    n_limit = updated_acc["limit_requests"]
-                    n_rem = updated_acc["remaining_requests"]
+                    n_limit = updated_acc["limit_pct"]
+                    n_rem = updated_acc["remaining_pct"]
                     if n_limit > 0 and (n_rem / n_limit) >= 0.3 and not updated_acc["rate_limit_reached"]:
                         update_account(account_id, {"status": "READY"})
                         logger.info(f"Account {account_id} recovered, switching to READY")

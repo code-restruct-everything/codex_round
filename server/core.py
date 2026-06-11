@@ -36,10 +36,15 @@ def save_auth(account_id: str, auth_data: Dict[str, Any]):
     path.write_text(json.dumps(auth_data, indent=2), encoding="utf-8")
 
 def is_expired(auth_data: Dict[str, Any]) -> bool:
-    # Check if access token is expired or about to expire in 60 seconds
-    expires_at = auth_data.get("expiresAt") or auth_data.get("expires_in")
-    if not isinstance(expires_at, (int, float)):
-        return True  # Force refresh if no numeric expiration found
+    expires_at = auth_data.get("expiresAt")
+    # expires_in from Codex CLI is a relative duration (e.g. 3600 seconds), not an absolute
+    # timestamp. Only treat it as an absolute timestamp if it looks like a Unix epoch (> year 2001).
+    if not isinstance(expires_at, (int, float)) or expires_at < 978307200:
+        fallback = auth_data.get("expires_in")
+        if isinstance(fallback, (int, float)) and fallback > 978307200:
+            expires_at = fallback
+        else:
+            return True  # No valid absolute timestamp — force refresh
     return time.time() + 60 >= expires_at
 
 async def refresh_token(account_id: str) -> Dict[str, Any]:

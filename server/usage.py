@@ -150,8 +150,8 @@ def normalize_usage_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     updates.update(_window_summary("weekly", weekly))
 
     if effective_percent_left is not None:
-        updates["limit_requests"] = 100
-        updates["remaining_requests"] = int(effective_percent_left)
+        updates["limit_pct"] = 100
+        updates["remaining_pct"] = int(effective_percent_left)
 
     reset_parts = []
     if five_hour and five_hour.get("reset_at"):

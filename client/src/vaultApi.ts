@@ -20,8 +20,8 @@ function getVaultClient(): AxiosInstance {
 export interface CheckoutResult {
     account_id: string;
     auth_json: AuthJson;
-    remaining_requests: number;
-    limit_requests: number;
+    remaining_pct: number;
+    limit_pct: number;
     reset_requests: string;
     five_hour_percent_left?: number;
     five_hour_reset_at?: string;
@@ -32,8 +32,8 @@ export interface CheckoutResult {
 }
 
 export interface UsageUpdate {
-    remaining_requests?: number;
-    limit_requests?: number;
+    remaining_pct?: number;
+    limit_pct?: number;
     reset_requests?: string;
     limit_tokens?: number;
     remaining_tokens?: number;
@@ -58,7 +58,7 @@ export async function checkoutAccount(): Promise<CheckoutResult | null> {
             vscode.window.showWarningMessage(`Codex Pool: ${e.response.data.detail}`);
             return null;
         }
-        console.error('Checkout failed:', e);
+        console.error('Checkout failed:', e.message);
         vscode.window.showErrorMessage(`Codex Pool Checkout Failed: ${e.message}`);
         throw e;
     }
@@ -70,7 +70,7 @@ export async function checkinAccount(accountId: string, authJson: AuthJson): Pro
         await client.post(`/checkin/${accountId}`, { auth_json: authJson });
         return true;
     } catch (e: any) {
-        console.error('Checkin failed:', e);
+        console.error('Checkin failed:', e.message);
         vscode.window.showErrorMessage(`Codex Pool Checkin Failed: ${e.message}`);
         // We throw so caller can implement exponential backoff
         throw e;
@@ -83,7 +83,7 @@ export async function updateAccountUsage(accountId: string, usage: UsageUpdate):
         await client.post(`/accounts/${accountId}/usage`, usage);
         return true;
     } catch (e: any) {
-        console.error('Usage update failed:', e);
+        console.error('Usage update failed:', e.message);
         return false;
     }
 }
@@ -94,7 +94,7 @@ export async function deleteAccount(accountId: string): Promise<boolean> {
         await client.delete(`/accounts/${accountId}`);
         return true;
     } catch (e: any) {
-        console.error('Delete account failed:', e);
+        console.error('Delete account failed:', e.message);
         return false;
     }
 }

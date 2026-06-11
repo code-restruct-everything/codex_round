@@ -1,6 +1,5 @@
 import sqlite3
 from typing import List, Optional, Dict, Any
-import json
 import threading
 from pathlib import Path
 import logging
@@ -32,8 +31,8 @@ def init_db():
                     checked_out_at TEXT,
                     returned_at TEXT,
                     reset_at TEXT,
-                    limit_requests INTEGER DEFAULT -1,
-                    remaining_requests INTEGER DEFAULT -1,
+                    limit_pct INTEGER DEFAULT -1,
+                    remaining_pct INTEGER DEFAULT -1,
                     limit_tokens INTEGER DEFAULT -1,
                     remaining_tokens INTEGER DEFAULT -1,
                     reset_requests TEXT,
@@ -54,7 +53,7 @@ def init_db():
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(accounts)").fetchall()
             }
-            migrations = {
+            add_columns = {
                 "five_hour_percent_left": "REAL DEFAULT -1",
                 "five_hour_reset_at": "TEXT",
                 "weekly_percent_left": "REAL DEFAULT -1",
@@ -64,10 +63,17 @@ def init_db():
                 "usage_error": "TEXT",
                 "plan_type": "TEXT",
                 "rate_limit_reached": "BOOLEAN DEFAULT 0",
+                "limit_pct": "INTEGER DEFAULT -1",
+                "remaining_pct": "INTEGER DEFAULT -1",
             }
-            for column, definition in migrations.items():
+            for column, definition in add_columns.items():
                 if column not in existing:
                     conn.execute(f"ALTER TABLE accounts ADD COLUMN {column} {definition}")
+            # Rename legacy columns if they still exist under the old names.
+            rename_columns = {"limit_requests": "limit_pct", "remaining_requests": "remaining_pct"}
+            for old, new in rename_columns.items():
+                if old in existing and new not in existing:
+                    conn.execute(f"ALTER TABLE accounts RENAME COLUMN {old} TO {new}")
             conn.commit()
 
 def get_account(account_id: str) -> Optional[sqlite3.Row]:
@@ -115,7 +121,7 @@ def pick_best_ready_account() -> Optional[sqlite3.Row]:
             cursor = conn.execute("""
                 SELECT * FROM accounts 
                 WHERE status = 'READY' AND is_healthy = 1 
-                ORDER BY remaining_requests DESC 
+                ORDER BY remaining_pct DESC
                 LIMIT 1
             """)
             return cursor.fetchone()

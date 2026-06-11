@@ -7,8 +7,8 @@ export interface QuotaInfo {
     banned: boolean;
     skipped?: boolean;
     reason?: string;
-    limit_requests?: number;
-    remaining_requests?: number;
+    limit_pct?: number;
+    remaining_pct?: number;
     reset_requests?: string;
     limit_tokens?: number;
     remaining_tokens?: number;
@@ -171,8 +171,8 @@ function normalizeUsagePayload(payload: any): QuotaInfo {
         five_hour_reset_at: fiveHour?.resetAt,
         weekly_percent_left: weekly?.percentLeft,
         weekly_reset_at: weekly?.resetAt,
-        limit_requests: effectivePercentLeft === undefined ? -1 : 100,
-        remaining_requests: effectivePercentLeft === undefined ? -1 : Math.floor(effectivePercentLeft),
+        limit_pct: effectivePercentLeft === undefined ? -1 : 100,
+        remaining_pct: effectivePercentLeft === undefined ? -1 : Math.floor(effectivePercentLeft),
         reset_requests: resetParts.join(' | ')
     };
 }

@@ -32,7 +32,7 @@ export async function activate(context: vscode.ExtensionContext) {
     if (currentAccountId) {
         const quota = await performHeartbeat();
         if (quota && !quota.banned) {
-            scheduleNextHeartbeat(quota.remaining_requests || -1, quota.limit_requests || -1);
+            scheduleNextHeartbeat(quota.remaining_pct || -1, quota.limit_pct || -1);
         }
     }
 }
@@ -49,8 +49,8 @@ async function performCheckout() {
         });
         updateStatusBar({
             account_id: currentAccountId,
-            remaining_requests: result.remaining_requests,
-            limit_requests: result.limit_requests,
+            remaining_pct: result.remaining_pct,
+            limit_pct: result.limit_pct,
             reset_requests: result.reset_requests,
             five_hour_percent_left: result.five_hour_percent_left,
             five_hour_reset_at: result.five_hour_reset_at,
@@ -88,8 +88,8 @@ async function performHeartbeat(): Promise<QuotaInfo | null> {
 
         updateStatusBar({
             account_id: currentAccountId,
-            remaining_requests: quota.remaining_requests,
-            limit_requests: quota.limit_requests,
+            remaining_pct: quota.remaining_pct,
+            limit_pct: quota.limit_pct,
             reset_requests: quota.reset_requests,
             five_hour_percent_left: quota.five_hour_percent_left,
             five_hour_reset_at: quota.five_hour_reset_at,
@@ -98,7 +98,7 @@ async function performHeartbeat(): Promise<QuotaInfo | null> {
         });
 
         // 自动换号逻辑：剩余额度极低
-        if (quota.rate_limit_reached || (quota.remaining_requests !== undefined && quota.remaining_requests < 5 && quota.limit_requests !== -1)) {
+        if (quota.rate_limit_reached || (quota.remaining_pct !== undefined && quota.remaining_pct < 5 && quota.limit_pct !== -1)) {
             vscode.window.showInformationMessage(`账号 ${currentAccountId} 额度即将耗尽，正在切换...`);
             try {
                 const latestAuth = readAuthJson();
@@ -106,7 +106,7 @@ async function performHeartbeat(): Promise<QuotaInfo | null> {
                     await checkinAccount(currentAccountId, latestAuth);
                 }
             } catch (e) {
-                console.error("Checkin failed during auto switch", e);
+                console.error("Checkin failed during auto switch", e.message);
             }
             clearClientState();
             await performCheckout();
@@ -130,7 +130,7 @@ function scheduleNextHeartbeat(remaining: number, limit: number) {
     heartbeatTimer = setTimeout(async () => {
         const quota = await performHeartbeat();
         if (quota && !quota.banned) {
-            scheduleNextHeartbeat(quota.remaining_requests || -1, quota.limit_requests || -1);
+            scheduleNextHeartbeat(quota.remaining_pct || -1, quota.limit_pct || -1);
         }
     }, intervalMs);
 }
@@ -173,7 +173,7 @@ function updateStatusBar(info: any) {
     } else {
         const fiveHour = typeof info.five_hour_percent_left === 'number'
             ? `5h ${Math.round(info.five_hour_percent_left)}%`
-            : `${info.remaining_requests}/${info.limit_requests} req`;
+            : `${info.remaining_pct}/${info.limit_pct}%`;
         const weekly = typeof info.weekly_percent_left === 'number'
             ? ` | 7d ${Math.round(info.weekly_percent_left)}%`
             : '';

@@ -3,18 +3,20 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
+import asyncio
 import os
 import logging
 
+_log_level = getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO)
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=_log_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("vault.main")
 
 from db import (
     get_account, list_accounts, insert_account, delete_account,
-    update_account, pick_best_ready_account, db_lock
+    update_account, pick_best_ready_account
 )
 from core import ensure_fresh_token, save_auth, get_auth_path, InvalidGrantError
 from scheduler import start_scheduler, remove_account
@@ -24,6 +26,7 @@ VAULT_API_KEY = os.environ.get("VAULT_API_KEY", "default_secret_key_change_me")
 
 app = FastAPI(title="Codex Account Pool Vault")
 security = HTTPBearer()
+checkout_lock = asyncio.Lock()
 
 def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if credentials.credentials != VAULT_API_KEY:
@@ -49,8 +52,8 @@ async def get_status():
 class CheckoutResponse(BaseModel):
     account_id: str
     auth_json: Dict[str, Any]
-    remaining_requests: int
-    limit_requests: int
+    remaining_pct: int
+    limit_pct: int
     reset_requests: str
     five_hour_percent_left: Optional[float] = None
     five_hour_reset_at: Optional[str] = None
@@ -61,7 +64,10 @@ class CheckoutResponse(BaseModel):
 
 @app.post("/checkout", dependencies=[Depends(verify_api_key)])
 async def checkout():
-    with db_lock:
+    # asyncio.Lock prevents two coroutines from double-checking out the same account.
+    # threading.RLock is reentrant within the same thread, so it does NOT block concurrent
+    # async coroutines that share the same event-loop thread.
+    async with checkout_lock:
         best_acc = pick_best_ready_account()
         if not best_acc:
             logger.warning("Checkout requested but no READY accounts available.")
@@ -69,45 +75,47 @@ async def checkout():
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="No accounts available currently."
             )
-        
+
         account_id = best_acc["account_id"]
         logger.info(f"Checking out account {account_id}")
-        
-        try:
-            auth_data = await ensure_fresh_token(account_id)
-        except InvalidGrantError:
-            logger.warning(f"Account {account_id} refresh_token invalid during checkout")
-            await remove_account(account_id, "refresh_token invalid during checkout")
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Selected account became invalid. Please try again."
-            )
-        except Exception as e:
-            logger.error(f"Error refreshing token for {account_id} during checkout: {e}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Error refreshing token: {str(e)}"
-            )
-        
-        # Update status to IN_USE
+
+        # Mark IN_USE before any await so no other coroutine can pick this account.
         update_account(account_id, {
             "status": "IN_USE",
             "checked_out_at": datetime.now(timezone.utc).isoformat()
         })
-        
-        return {
-            "account_id": account_id,
-            "auth_json": auth_data,
-            "remaining_requests": best_acc["remaining_requests"],
-            "limit_requests": best_acc["limit_requests"],
-            "reset_requests": best_acc["reset_requests"] or "",
-            "five_hour_percent_left": best_acc["five_hour_percent_left"],
-            "five_hour_reset_at": best_acc["five_hour_reset_at"],
-            "weekly_percent_left": best_acc["weekly_percent_left"],
-            "weekly_reset_at": best_acc["weekly_reset_at"],
-            "usage_updated_at": best_acc["usage_updated_at"],
-            "usage_source": best_acc["usage_source"],
-        }
+
+    # Token refresh happens outside the lock — it's I/O and must not block other checkouts.
+    try:
+        auth_data = await ensure_fresh_token(account_id)
+    except InvalidGrantError:
+        logger.warning(f"Account {account_id} refresh_token invalid during checkout")
+        await remove_account(account_id, "refresh_token invalid during checkout")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Selected account became invalid. Please try again."
+        )
+    except Exception as e:
+        logger.error(f"Error refreshing token for {account_id} during checkout: {e}", exc_info=True)
+        update_account(account_id, {"status": "READY"})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error refreshing token: {str(e)}"
+        )
+
+    return {
+        "account_id": account_id,
+        "auth_json": auth_data,
+        "remaining_pct": best_acc["remaining_pct"],
+        "limit_pct": best_acc["limit_pct"],
+        "reset_requests": best_acc["reset_requests"] or "",
+        "five_hour_percent_left": best_acc["five_hour_percent_left"],
+        "five_hour_reset_at": best_acc["five_hour_reset_at"],
+        "weekly_percent_left": best_acc["weekly_percent_left"],
+        "weekly_reset_at": best_acc["weekly_reset_at"],
+        "usage_updated_at": best_acc["usage_updated_at"],
+        "usage_source": best_acc["usage_source"],
+    }
 
 class CheckinRequest(BaseModel):
     auth_json: Dict[str, Any]
@@ -133,9 +141,9 @@ async def checkin(account_id: str, req: CheckinRequest):
     latest_acc = get_account(account_id)
     next_status = "READY"
     if latest_acc:
-        limit = latest_acc["limit_requests"]
-        remaining = latest_acc["remaining_requests"]
-        if latest_acc["rate_limit_reached"] or (limit > 0 and remaining >= 0 and (remaining / limit) < 0.3):
+        limit_pct = latest_acc["limit_pct"]
+        remaining_pct = latest_acc["remaining_pct"]
+        if latest_acc["rate_limit_reached"] or (limit_pct > 0 and remaining_pct >= 0 and (remaining_pct / limit_pct) < 0.3):
             next_status = "COOLING"
 
     update_account(account_id, {
@@ -146,8 +154,8 @@ async def checkin(account_id: str, req: CheckinRequest):
     return {"status": "ok"}
 
 class UsageUpdateRequest(BaseModel):
-    remaining_requests: Optional[int] = None
-    limit_requests: Optional[int] = None
+    remaining_pct: Optional[int] = None
+    limit_pct: Optional[int] = None
     reset_requests: Optional[str] = None
     limit_tokens: Optional[int] = None
     remaining_tokens: Optional[int] = None
@@ -177,7 +185,7 @@ async def update_usage(account_id: str, req: UsageUpdateRequest):
     if updates and "usage_updated_at" not in updates:
         updates["usage_updated_at"] = datetime.now(timezone.utc).isoformat()
 
-    if updates.get("rate_limit_reached") or updates.get("remaining_requests") == 0:
+    if updates.get("rate_limit_reached") or updates.get("remaining_pct") == 0:
         updates["status"] = "COOLING"
 
     update_account(account_id, updates)
