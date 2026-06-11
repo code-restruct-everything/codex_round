@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.checkoutAccount = checkoutAccount;
+exports.ackCheckout = ackCheckout;
 exports.checkinAccount = checkinAccount;
 exports.updateAccountUsage = updateAccountUsage;
 exports.deleteAccount = deleteAccount;
@@ -19,19 +20,37 @@ function getVaultClient() {
         timeout: 15000
     });
 }
-async function checkoutAccount() {
+async function checkoutAccount(checkoutRequestId, showError = true) {
     const client = getVaultClient();
     try {
-        const response = await client.post('/checkout');
+        const response = await client.post('/checkout', { checkout_request_id: checkoutRequestId });
         return response.data;
     }
     catch (e) {
         if (e.response && e.response.status === 503) {
-            vscode.window.showWarningMessage(`Codex Pool: ${e.response.data.detail}`);
+            if (showError) {
+                vscode.window.showWarningMessage(`Codex Pool: ${e.response.data.detail}`);
+            }
             return null;
         }
         console.error('Checkout failed:', e.message);
-        vscode.window.showErrorMessage(`Codex Pool Checkout Failed: ${e.message}`);
+        if (showError) {
+            vscode.window.showErrorMessage(`Codex Pool Checkout Failed: ${e.message}`);
+        }
+        throw e;
+    }
+}
+async function ackCheckout(accountId, checkoutRequestId, showError = true) {
+    const client = getVaultClient();
+    try {
+        const response = await client.post(`/checkout/${accountId}/ack`, { checkout_request_id: checkoutRequestId });
+        return response.data;
+    }
+    catch (e) {
+        console.error('Checkout ack failed:', e.message);
+        if (showError) {
+            vscode.window.showErrorMessage(`Codex Pool Checkout Ack Failed: ${e.message}`);
+        }
         throw e;
     }
 }

@@ -29,6 +29,9 @@ export interface AuthJson {
 export interface ClientState {
     current_account_id?: string;
     checked_out_at?: string;
+    checkout_request_id?: string;
+    checkout_started_at?: string;
+    pending_checkout_account_id?: string;
 }
 
 const CODEX_DIR = path.join(os.homedir(), '.codex');

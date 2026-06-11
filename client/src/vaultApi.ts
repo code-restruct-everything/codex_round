@@ -20,6 +20,7 @@ function getVaultClient(): AxiosInstance {
 export interface CheckoutResult {
     account_id: string;
     auth_json: AuthJson;
+    checkout_request_id: string;
     remaining_pct: number;
     limit_pct: number;
     reset_requests: string;
@@ -29,6 +30,11 @@ export interface CheckoutResult {
     weekly_reset_at?: string;
     usage_updated_at?: string;
     usage_source?: string;
+}
+
+export interface CheckoutAckResult {
+    status: string;
+    already_acknowledged?: boolean;
 }
 
 export interface UsageUpdate {
@@ -48,18 +54,36 @@ export interface UsageUpdate {
     rate_limit_reached?: boolean;
 }
 
-export async function checkoutAccount(): Promise<CheckoutResult | null> {
+export async function checkoutAccount(checkoutRequestId: string, showError = true): Promise<CheckoutResult | null> {
     const client = getVaultClient();
     try {
-        const response = await client.post('/checkout');
+        const response = await client.post('/checkout', { checkout_request_id: checkoutRequestId });
         return response.data as CheckoutResult;
     } catch (e: any) {
         if (e.response && e.response.status === 503) {
-            vscode.window.showWarningMessage(`Codex Pool: ${e.response.data.detail}`);
+            if (showError) {
+                vscode.window.showWarningMessage(`Codex Pool: ${e.response.data.detail}`);
+            }
             return null;
         }
         console.error('Checkout failed:', e.message);
-        vscode.window.showErrorMessage(`Codex Pool Checkout Failed: ${e.message}`);
+        if (showError) {
+            vscode.window.showErrorMessage(`Codex Pool Checkout Failed: ${e.message}`);
+        }
+        throw e;
+    }
+}
+
+export async function ackCheckout(accountId: string, checkoutRequestId: string, showError = true): Promise<CheckoutAckResult> {
+    const client = getVaultClient();
+    try {
+        const response = await client.post(`/checkout/${accountId}/ack`, { checkout_request_id: checkoutRequestId });
+        return response.data as CheckoutAckResult;
+    } catch (e: any) {
+        console.error('Checkout ack failed:', e.message);
+        if (showError) {
+            vscode.window.showErrorMessage(`Codex Pool Checkout Ack Failed: ${e.message}`);
+        }
         throw e;
     }
 }

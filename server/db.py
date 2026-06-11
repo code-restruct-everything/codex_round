@@ -46,7 +46,9 @@ def init_db():
                     plan_type TEXT,
                     rate_limit_reached BOOLEAN DEFAULT 0,
                     last_heartbeat_at TEXT,
-                    is_healthy BOOLEAN DEFAULT 1
+                    is_healthy BOOLEAN DEFAULT 1,
+                    checkout_request_id TEXT,
+                    checkout_acknowledged_at TEXT
                 )
             """)
             existing = {
@@ -65,6 +67,8 @@ def init_db():
                 "rate_limit_reached": "BOOLEAN DEFAULT 0",
                 "limit_pct": "INTEGER DEFAULT -1",
                 "remaining_pct": "INTEGER DEFAULT -1",
+                "checkout_request_id": "TEXT",
+                "checkout_acknowledged_at": "TEXT",
             }
             for column, definition in add_columns.items():
                 if column not in existing:

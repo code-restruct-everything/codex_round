@@ -1,12 +1,14 @@
 import * as vscode from 'vscode';
+import { randomUUID } from 'crypto';
 import { readClientState, writeClientState, readAuthJson, writeAuthJson, clearClientState } from './utils';
-import { checkoutAccount, checkinAccount, deleteAccount, updateAccountUsage } from './vaultApi';
+import { ackCheckout, checkoutAccount, checkinAccount, deleteAccount, updateAccountUsage, CheckoutResult } from './vaultApi';
 import { runClientHeartbeat, QuotaInfo } from './heartbeat';
 
 let heartbeatTimer: NodeJS.Timeout | undefined;
 let statusBarItem: vscode.StatusBarItem;
 let currentAccountId: string | undefined;
 const CHECKIN_RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000, 120_000];
+const CHECKOUT_RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000, 120_000];
 
 export async function activate(context: vscode.ExtensionContext) {
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -40,13 +42,28 @@ export async function activate(context: vscode.ExtensionContext) {
 
 async function performCheckout() {
     updateStatusBar({ status: '获取账号中...' });
-    const result = await checkoutAccount();
-    if (result) {
+    const state = readClientState();
+    const checkoutRequestId = state?.checkout_request_id || randomUUID();
+    const checkoutStartedAt = state?.checkout_started_at || new Date().toISOString();
+    let result: CheckoutResult | null = null;
+
+    writeClientState({
+        checkout_request_id: checkoutRequestId,
+        checkout_started_at: checkoutStartedAt,
+        pending_checkout_account_id: state?.pending_checkout_account_id
+    });
+
+    if (state?.pending_checkout_account_id && readAuthJson()) {
+        currentAccountId = state.pending_checkout_account_id;
+        updateStatusBar({ status: '确认账号中...' });
+    } else {
+        result = await checkoutAccountWithRetry(checkoutRequestId);
         currentAccountId = result.account_id;
         writeAuthJson(result.auth_json);
         writeClientState({
-            current_account_id: currentAccountId,
-            checked_out_at: new Date().toISOString()
+            checkout_request_id: checkoutRequestId,
+            checkout_started_at: checkoutStartedAt,
+            pending_checkout_account_id: currentAccountId
         });
         updateStatusBar({
             account_id: currentAccountId,
@@ -58,10 +75,13 @@ async function performCheckout() {
             weekly_percent_left: result.weekly_percent_left,
             weekly_reset_at: result.weekly_reset_at
         });
-    } else {
-        currentAccountId = undefined;
-        updateStatusBar({ status: '无可用账号' });
     }
+
+    await ackCheckoutWithRetry(currentAccountId!, checkoutRequestId);
+    writeClientState({
+        current_account_id: currentAccountId,
+        checked_out_at: new Date().toISOString()
+    });
 }
 
 async function performHeartbeat(): Promise<QuotaInfo | null> {
@@ -131,6 +151,43 @@ function scheduleNextHeartbeat(remaining: number, limit: number) {
     }, intervalMs);
 }
 
+async function checkoutAccountWithRetry(checkoutRequestId: string): Promise<CheckoutResult> {
+    let attempt = 0;
+
+    while (true) {
+        try {
+            const result = await checkoutAccount(checkoutRequestId, false);
+            if (result) {
+                return result;
+            }
+        } catch (e: any) {
+            console.error(`Checkout attempt ${attempt + 1} failed`, e.message);
+        }
+
+        attempt += 1;
+        const delayMs = getCheckoutRetryDelay(attempt);
+        updateStatusBar({ status: `获取账号失败，${Math.round(delayMs / 1000)}秒后重试...` });
+        await sleep(delayMs);
+    }
+}
+
+async function ackCheckoutWithRetry(accountId: string, checkoutRequestId: string): Promise<void> {
+    let attempt = 0;
+
+    while (true) {
+        try {
+            await ackCheckout(accountId, checkoutRequestId, false);
+            return;
+        } catch (e: any) {
+            attempt += 1;
+            const delayMs = getCheckoutRetryDelay(attempt);
+            console.error(`Checkout ack attempt ${attempt} failed for ${accountId}`, e.message);
+            updateStatusBar({ status: `确认账号失败，${Math.round(delayMs / 1000)}秒后重试...` });
+            await sleep(delayMs);
+        }
+    }
+}
+
 function stopHeartbeatTimer() {
     if (heartbeatTimer) {
         clearTimeout(heartbeatTimer);
@@ -167,6 +224,10 @@ async function checkinCurrentAccountWithRetry(accountId: string): Promise<void> 
 
 function getCheckinRetryDelay(attempt: number): number {
     return CHECKIN_RETRY_DELAYS_MS[Math.min(attempt - 1, CHECKIN_RETRY_DELAYS_MS.length - 1)];
+}
+
+function getCheckoutRetryDelay(attempt: number): number {
+    return CHECKOUT_RETRY_DELAYS_MS[Math.min(attempt - 1, CHECKOUT_RETRY_DELAYS_MS.length - 1)];
 }
 
 function sleep(ms: number): Promise<void> {

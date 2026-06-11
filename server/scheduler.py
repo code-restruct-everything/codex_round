@@ -72,7 +72,11 @@ async def finalize_checkin_locked(account_id: str):
         if latest_acc["rate_limit_reached"] or (limit_pct > 0 and remaining_pct >= 0 and (remaining_pct / limit_pct) < 0.3):
             next_status = "COOLING"
 
-    update_account(account_id, {"status": next_status})
+    update_account(account_id, {
+        "status": next_status,
+        "checkout_request_id": None,
+        "checkout_acknowledged_at": None
+    })
     logger.info(f"Account {account_id} finalized checkin as {next_status}")
     return {"status": "ok"}
 

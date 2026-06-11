@@ -19,7 +19,7 @@ from db import (
     update_account, pick_best_ready_account
 )
 from core import ensure_fresh_token, save_auth, get_auth_path, InvalidGrantError
-from scheduler import start_scheduler, remove_account, checkin_account
+from scheduler import start_scheduler, remove_account, checkin_account, get_checkin_lock
 
 # API Key config
 VAULT_API_KEY = os.environ.get("VAULT_API_KEY", "default_secret_key_change_me")
@@ -52,6 +52,7 @@ async def get_status():
 class CheckoutResponse(BaseModel):
     account_id: str
     auth_json: Dict[str, Any]
+    checkout_request_id: str
     remaining_pct: int
     limit_pct: int
     reset_requests: str
@@ -62,13 +63,26 @@ class CheckoutResponse(BaseModel):
     usage_updated_at: Optional[str] = None
     usage_source: Optional[str] = None
 
+class CheckoutRequest(BaseModel):
+    checkout_request_id: str
+
+def find_checkout_request(checkout_request_id: str):
+    for acc in list_accounts():
+        if acc["checkout_request_id"] == checkout_request_id and acc["status"] in ("CHECKING_OUT", "IN_USE"):
+            return acc
+    return None
+
 @app.post("/checkout", dependencies=[Depends(verify_api_key)])
-async def checkout():
+async def checkout(req: CheckoutRequest):
     # asyncio.Lock prevents two coroutines from double-checking out the same account.
     # threading.RLock is reentrant within the same thread, so it does NOT block concurrent
     # async coroutines that share the same event-loop thread.
     async with checkout_lock:
-        best_acc = pick_best_ready_account()
+        best_acc = find_checkout_request(req.checkout_request_id)
+        if best_acc:
+            logger.info(f"Replaying checkout request {req.checkout_request_id} for account {best_acc['account_id']}")
+        else:
+            best_acc = pick_best_ready_account()
         if not best_acc:
             logger.warning("Checkout requested but no READY accounts available.")
             raise HTTPException(
@@ -79,43 +93,80 @@ async def checkout():
         account_id = best_acc["account_id"]
         logger.info(f"Checking out account {account_id}")
 
-        # Mark IN_USE before any await so no other coroutine can pick this account.
-        update_account(account_id, {
-            "status": "IN_USE",
-            "checked_out_at": datetime.now(timezone.utc).isoformat()
-        })
+        if best_acc["status"] == "READY":
+            # Mark CHECKING_OUT before any await so no other coroutine can pick this account.
+            update_account(account_id, {
+                "status": "CHECKING_OUT",
+                "checkout_request_id": req.checkout_request_id,
+                "checkout_acknowledged_at": None,
+                "checked_out_at": datetime.now(timezone.utc).isoformat()
+            })
 
-    # Token refresh happens outside the lock — it's I/O and must not block other checkouts.
-    try:
-        auth_data = await ensure_fresh_token(account_id)
-    except InvalidGrantError:
-        logger.warning(f"Account {account_id} refresh_token invalid during checkout")
-        await remove_account(account_id, "refresh_token invalid during checkout")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Selected account became invalid. Please try again."
-        )
-    except Exception as e:
-        logger.error(f"Error refreshing token for {account_id} during checkout: {e}", exc_info=True)
-        update_account(account_id, {"status": "READY"})
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error refreshing token: {str(e)}"
-        )
+    # Token refresh happens outside the global checkout lock, but inside the per-account
+    # lock so checkout, checkin finalize, and scheduler heartbeat cannot refresh together.
+    async with get_checkin_lock(account_id):
+        latest_acc = get_account(account_id)
+        if not latest_acc or latest_acc["checkout_request_id"] != req.checkout_request_id:
+            raise HTTPException(status_code=409, detail="Checkout request no longer owns this account.")
+        try:
+            auth_data = await ensure_fresh_token(account_id)
+        except InvalidGrantError:
+            logger.warning(f"Account {account_id} refresh_token invalid during checkout")
+            await remove_account(account_id, "refresh_token invalid during checkout")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Selected account became invalid. Please try again."
+            )
+        except Exception as e:
+            logger.error(f"Error refreshing token for {account_id} during checkout: {e}", exc_info=True)
+            if latest_acc["status"] == "CHECKING_OUT":
+                update_account(account_id, {
+                    "status": "READY",
+                    "checkout_request_id": None,
+                    "checkout_acknowledged_at": None
+                })
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error refreshing token: {str(e)}"
+            )
+
+    response_acc = get_account(account_id) or best_acc
 
     return {
         "account_id": account_id,
         "auth_json": auth_data,
-        "remaining_pct": best_acc["remaining_pct"],
-        "limit_pct": best_acc["limit_pct"],
-        "reset_requests": best_acc["reset_requests"] or "",
-        "five_hour_percent_left": best_acc["five_hour_percent_left"],
-        "five_hour_reset_at": best_acc["five_hour_reset_at"],
-        "weekly_percent_left": best_acc["weekly_percent_left"],
-        "weekly_reset_at": best_acc["weekly_reset_at"],
-        "usage_updated_at": best_acc["usage_updated_at"],
-        "usage_source": best_acc["usage_source"],
+        "checkout_request_id": req.checkout_request_id,
+        "remaining_pct": response_acc["remaining_pct"],
+        "limit_pct": response_acc["limit_pct"],
+        "reset_requests": response_acc["reset_requests"] or "",
+        "five_hour_percent_left": response_acc["five_hour_percent_left"],
+        "five_hour_reset_at": response_acc["five_hour_reset_at"],
+        "weekly_percent_left": response_acc["weekly_percent_left"],
+        "weekly_reset_at": response_acc["weekly_reset_at"],
+        "usage_updated_at": response_acc["usage_updated_at"],
+        "usage_source": response_acc["usage_source"],
     }
+
+class CheckoutAckRequest(BaseModel):
+    checkout_request_id: str
+
+@app.post("/checkout/{account_id}/ack", dependencies=[Depends(verify_api_key)])
+async def checkout_ack(account_id: str, req: CheckoutAckRequest):
+    async with get_checkin_lock(account_id):
+        acc = get_account(account_id)
+        if not acc:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if acc["checkout_request_id"] != req.checkout_request_id:
+            raise HTTPException(status_code=409, detail="Checkout request does not match account.")
+        if acc["status"] == "CHECKING_OUT":
+            update_account(account_id, {
+                "status": "IN_USE",
+                "checkout_acknowledged_at": datetime.now(timezone.utc).isoformat()
+            })
+            return {"status": "ok"}
+        if acc["status"] == "IN_USE":
+            return {"status": "ok", "already_acknowledged": True}
+        raise HTTPException(status_code=409, detail=f"Cannot ack checkout while account is {acc['status']}.")
 
 class CheckinRequest(BaseModel):
     auth_json: Dict[str, Any]
@@ -161,7 +212,7 @@ async def update_usage(account_id: str, req: UsageUpdateRequest):
     if updates and "usage_updated_at" not in updates:
         updates["usage_updated_at"] = datetime.now(timezone.utc).isoformat()
 
-    if acc["status"] not in ("IN_USE", "RETURNING") and (updates.get("rate_limit_reached") or updates.get("remaining_pct") == 0):
+    if acc["status"] not in ("IN_USE", "RETURNING", "CHECKING_OUT") and (updates.get("rate_limit_reached") or updates.get("remaining_pct") == 0):
         updates["status"] = "COOLING"
 
     update_account(account_id, updates)
