@@ -2,8 +2,9 @@ import httpx
 import json
 import time
 import os
+import uuid
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 import logging
 
@@ -30,10 +31,33 @@ def load_auth(account_id: str) -> Dict[str, Any]:
         raise FileNotFoundError(f"Auth file not found for account: {account_id}")
     return json.loads(path.read_text(encoding="utf-8"))
 
+def atomic_write_bytes(path: Path, data: bytes):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with tmp_path.open("wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+def backup_auth(account_id: str, suffix: str = "bak") -> Optional[Path]:
+    path = get_auth_path(account_id)
+    if not path.exists():
+        return None
+    safe_suffix = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in suffix)
+    backup_path = path.with_name(f"{path.name}.{safe_suffix}.bak")
+    atomic_write_bytes(backup_path, path.read_bytes())
+    return backup_path
+
 def save_auth(account_id: str, auth_data: Dict[str, Any]):
     path = get_auth_path(account_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(auth_data, indent=2), encoding="utf-8")
+    if path.exists():
+        backup_auth(account_id)
+    atomic_write_bytes(path, json.dumps(auth_data, indent=2).encode("utf-8"))
 
 def is_expired(auth_data: Dict[str, Any]) -> bool:
     expires_at = auth_data.get("expiresAt")

@@ -48,7 +48,9 @@ def init_db():
                     last_heartbeat_at TEXT,
                     is_healthy BOOLEAN DEFAULT 1,
                     checkout_request_id TEXT,
-                    checkout_acknowledged_at TEXT
+                    checkout_acknowledged_at TEXT,
+                    quarantine_reason TEXT,
+                    quarantined_at TEXT
                 )
             """)
             existing = {
@@ -69,6 +71,8 @@ def init_db():
                 "remaining_pct": "INTEGER DEFAULT -1",
                 "checkout_request_id": "TEXT",
                 "checkout_acknowledged_at": "TEXT",
+                "quarantine_reason": "TEXT",
+                "quarantined_at": "TEXT",
             }
             for column, definition in add_columns.items():
                 if column not in existing:

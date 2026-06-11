@@ -88,10 +88,13 @@ export async function ackCheckout(accountId: string, checkoutRequestId: string, 
     }
 }
 
-export async function checkinAccount(accountId: string, authJson: AuthJson, showError = true): Promise<boolean> {
+export async function checkinAccount(accountId: string, authJson: AuthJson, checkoutRequestId: string, showError = true): Promise<boolean> {
     const client = getVaultClient();
     try {
-        await client.post(`/checkin/${accountId}`, { auth_json: authJson });
+        await client.post(`/checkin/${accountId}`, {
+            auth_json: authJson,
+            checkout_request_id: checkoutRequestId
+        });
         return true;
     } catch (e: any) {
         console.error('Checkin failed:', e.message);

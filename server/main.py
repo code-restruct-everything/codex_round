@@ -15,11 +15,11 @@ logging.basicConfig(
 logger = logging.getLogger("vault.main")
 
 from db import (
-    get_account, list_accounts, insert_account, delete_account,
+    get_account, list_accounts, insert_account,
     update_account, pick_best_ready_account
 )
-from core import ensure_fresh_token, save_auth, get_auth_path, InvalidGrantError
-from scheduler import start_scheduler, remove_account, checkin_account, get_checkin_lock
+from core import ensure_fresh_token, load_auth, save_auth, InvalidGrantError
+from scheduler import start_scheduler, remove_account, checkin_account, get_checkin_lock, LeaseMismatchError
 
 # API Key config
 VAULT_API_KEY = os.environ.get("VAULT_API_KEY", "default_secret_key_change_me")
@@ -109,7 +109,14 @@ async def checkout(req: CheckoutRequest):
         if not latest_acc or latest_acc["checkout_request_id"] != req.checkout_request_id:
             raise HTTPException(status_code=409, detail="Checkout request no longer owns this account.")
         try:
-            auth_data = await ensure_fresh_token(account_id)
+            if latest_acc["status"] == "IN_USE":
+                auth_data = load_auth(account_id)
+            elif latest_acc["status"] == "CHECKING_OUT":
+                auth_data = await ensure_fresh_token(account_id)
+            else:
+                raise HTTPException(status_code=409, detail=f"Checkout request is {latest_acc['status']}.")
+        except HTTPException:
+            raise
         except InvalidGrantError:
             logger.warning(f"Account {account_id} refresh_token invalid during checkout")
             await remove_account(account_id, "refresh_token invalid during checkout")
@@ -170,15 +177,19 @@ async def checkout_ack(account_id: str, req: CheckoutAckRequest):
 
 class CheckinRequest(BaseModel):
     auth_json: Dict[str, Any]
+    checkout_request_id: str
 
 @app.post("/checkin/{account_id}", dependencies=[Depends(verify_api_key)])
 async def checkin(account_id: str, req: CheckinRequest):
     logger.info(f"Checking in account {account_id}")
     try:
-        return await checkin_account(account_id, req.auth_json)
+        return await checkin_account(account_id, req.auth_json, req.checkout_request_id)
     except KeyError:
         logger.warning(f"Checkin failed: Account {account_id} not found")
         raise HTTPException(status_code=404, detail="Account not found")
+    except LeaseMismatchError as e:
+        logger.warning(f"Checkin lease mismatch for {account_id}: {e}")
+        raise HTTPException(status_code=409, detail=str(e))
 
 class UsageUpdateRequest(BaseModel):
     remaining_pct: Optional[int] = None
@@ -237,7 +248,11 @@ async def add_account(req: AddAccountRequest):
     if not has_access or not has_refresh:
         logger.warning(f"Failed to add account {req.account_id}: Invalid auth.json format")
         raise HTTPException(status_code=400, detail="Invalid auth.json format")
-        
+
+    if get_account(req.account_id):
+        logger.warning(f"Failed to add account {req.account_id}: account already exists")
+        raise HTTPException(status_code=409, detail="Account already exists; refusing to overwrite auth.json")
+
     save_auth(req.account_id, req.auth_json)
     insert_account(req.account_id)
     logger.info(f"Successfully added account {req.account_id}")

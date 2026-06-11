@@ -32,11 +32,34 @@ export interface ClientState {
     checkout_request_id?: string;
     checkout_started_at?: string;
     pending_checkout_account_id?: string;
+    pending_checkin_account_id?: string;
+    pending_checkin_checkout_request_id?: string;
+    checkin_started_at?: string;
 }
 
 const CODEX_DIR = path.join(os.homedir(), '.codex');
 const AUTH_JSON_PATH = path.join(CODEX_DIR, 'auth.json');
 const STATE_FILE_PATH = path.join(os.homedir(), '.codex-client-state.json');
+
+function atomicWriteFile(filePath: string, content: string): void {
+    const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    let fd: number | undefined;
+    try {
+        fd = fs.openSync(tmpPath, 'w');
+        fs.writeFileSync(fd, content, 'utf-8');
+        fs.fsyncSync(fd);
+        fs.closeSync(fd);
+        fd = undefined;
+        fs.renameSync(tmpPath, filePath);
+    } finally {
+        if (fd !== undefined) {
+            fs.closeSync(fd);
+        }
+        if (fs.existsSync(tmpPath)) {
+            fs.unlinkSync(tmpPath);
+        }
+    }
+}
 
 export function readAuthJson(): AuthJson | null {
     try {
@@ -56,9 +79,10 @@ export function writeAuthJson(auth: AuthJson): void {
         if (!fs.existsSync(CODEX_DIR)) {
             fs.mkdirSync(CODEX_DIR, { recursive: true });
         }
-        fs.writeFileSync(AUTH_JSON_PATH, JSON.stringify(auth, null, 2), 'utf-8');
+        atomicWriteFile(AUTH_JSON_PATH, JSON.stringify(auth, null, 2));
     } catch (e) {
         console.error('Failed to write auth.json', e);
+        throw e;
     }
 }
 
@@ -77,9 +101,10 @@ export function readClientState(): ClientState | null {
 
 export function writeClientState(state: ClientState): void {
     try {
-        fs.writeFileSync(STATE_FILE_PATH, JSON.stringify(state, null, 2), 'utf-8');
+        atomicWriteFile(STATE_FILE_PATH, JSON.stringify(state, null, 2));
     } catch (e) {
         console.error('Failed to write client state', e);
+        throw e;
     }
 }
 
@@ -90,5 +115,6 @@ export function clearClientState(): void {
         }
     } catch (e) {
         console.error('Failed to clear client state', e);
+        throw e;
     }
 }
