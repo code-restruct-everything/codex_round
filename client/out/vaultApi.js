@@ -30,7 +30,7 @@ async function checkoutAccount() {
             vscode.window.showWarningMessage(`Codex Pool: ${e.response.data.detail}`);
             return null;
         }
-        console.error('Checkout failed:', e);
+        console.error('Checkout failed:', e.message);
         vscode.window.showErrorMessage(`Codex Pool Checkout Failed: ${e.message}`);
         throw e;
     }
@@ -42,7 +42,7 @@ async function checkinAccount(accountId, authJson) {
         return true;
     }
     catch (e) {
-        console.error('Checkin failed:', e);
+        console.error('Checkin failed:', e.message);
         vscode.window.showErrorMessage(`Codex Pool Checkin Failed: ${e.message}`);
         // We throw so caller can implement exponential backoff
         throw e;
@@ -55,7 +55,7 @@ async function updateAccountUsage(accountId, usage) {
         return true;
     }
     catch (e) {
-        console.error('Usage update failed:', e);
+        console.error('Usage update failed:', e.message);
         return false;
     }
 }
@@ -66,7 +66,7 @@ async function deleteAccount(accountId) {
         return true;
     }
     catch (e) {
-        console.error('Delete account failed:', e);
+        console.error('Delete account failed:', e.message);
         return false;
     }
 }

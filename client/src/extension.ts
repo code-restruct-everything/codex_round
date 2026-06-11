@@ -105,7 +105,7 @@ async function performHeartbeat(): Promise<QuotaInfo | null> {
                 if (latestAuth) {
                     await checkinAccount(currentAccountId, latestAuth);
                 }
-            } catch (e) {
+            } catch (e: any) {
                 console.error("Checkin failed during auto switch", e.message);
             }
             clearClientState();

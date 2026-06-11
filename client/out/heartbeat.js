@@ -132,8 +132,8 @@ function normalizeUsagePayload(payload) {
         five_hour_reset_at: fiveHour?.resetAt,
         weekly_percent_left: weekly?.percentLeft,
         weekly_reset_at: weekly?.resetAt,
-        limit_requests: effectivePercentLeft === undefined ? -1 : 100,
-        remaining_requests: effectivePercentLeft === undefined ? -1 : Math.floor(effectivePercentLeft),
+        limit_pct: effectivePercentLeft === undefined ? -1 : 100,
+        remaining_pct: effectivePercentLeft === undefined ? -1 : Math.floor(effectivePercentLeft),
         reset_requests: resetParts.join(' | ')
     };
 }
