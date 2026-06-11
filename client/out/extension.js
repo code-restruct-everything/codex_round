@@ -9,6 +9,7 @@ const heartbeat_1 = require("./heartbeat");
 let heartbeatTimer;
 let statusBarItem;
 let currentAccountId;
+const CHECKIN_RETRY_DELAYS_MS = [5000, 15000, 30000, 60000, 120000];
 async function activate(context) {
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBarItem.command = 'codexPool.showPanel';
@@ -92,16 +93,10 @@ async function performHeartbeat() {
         });
         // 自动换号逻辑：剩余额度极低
         if (quota.rate_limit_reached || (quota.remaining_pct !== undefined && quota.remaining_pct < 5 && quota.limit_pct !== -1)) {
+            const accountToReturn = currentAccountId;
             vscode.window.showInformationMessage(`账号 ${currentAccountId} 额度即将耗尽，正在切换...`);
-            try {
-                const latestAuth = (0, utils_1.readAuthJson)();
-                if (latestAuth) {
-                    await (0, vaultApi_1.checkinAccount)(currentAccountId, latestAuth);
-                }
-            }
-            catch (e) {
-                console.error("Checkin failed during auto switch", e.message);
-            }
+            stopHeartbeatTimer();
+            await checkinCurrentAccountWithRetry(accountToReturn);
             (0, utils_1.clearClientState)();
             await performCheckout();
             return null;
@@ -126,6 +121,43 @@ function scheduleNextHeartbeat(remaining, limit) {
             scheduleNextHeartbeat(quota.remaining_pct || -1, quota.limit_pct || -1);
         }
     }, intervalMs);
+}
+function stopHeartbeatTimer() {
+    if (heartbeatTimer) {
+        clearTimeout(heartbeatTimer);
+        heartbeatTimer = undefined;
+    }
+}
+async function checkinCurrentAccountWithRetry(accountId) {
+    let attempt = 0;
+    while (true) {
+        const latestAuth = (0, utils_1.readAuthJson)();
+        if (latestAuth) {
+            try {
+                await (0, vaultApi_1.checkinAccount)(accountId, latestAuth, false);
+                vscode.window.showInformationMessage(`成功归还账号: ${accountId}`);
+                return;
+            }
+            catch (e) {
+                attempt += 1;
+                const delayMs = getCheckinRetryDelay(attempt);
+                console.error(`Checkin attempt ${attempt} failed for ${accountId}`, e.message);
+                updateStatusBar({ status: `归还失败，${Math.round(delayMs / 1000)}秒后重试...` });
+                await sleep(delayMs);
+                continue;
+            }
+        }
+        attempt += 1;
+        const delayMs = getCheckinRetryDelay(attempt);
+        updateStatusBar({ status: `auth.json 缺失，${Math.round(delayMs / 1000)}秒后重试...` });
+        await sleep(delayMs);
+    }
+}
+function getCheckinRetryDelay(attempt) {
+    return CHECKIN_RETRY_DELAYS_MS[Math.min(attempt - 1, CHECKIN_RETRY_DELAYS_MS.length - 1)];
+}
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 async function manualReturn() {
     if (!currentAccountId) {

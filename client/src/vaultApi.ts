@@ -64,14 +64,16 @@ export async function checkoutAccount(): Promise<CheckoutResult | null> {
     }
 }
 
-export async function checkinAccount(accountId: string, authJson: AuthJson): Promise<boolean> {
+export async function checkinAccount(accountId: string, authJson: AuthJson, showError = true): Promise<boolean> {
     const client = getVaultClient();
     try {
         await client.post(`/checkin/${accountId}`, { auth_json: authJson });
         return true;
     } catch (e: any) {
         console.error('Checkin failed:', e.message);
-        vscode.window.showErrorMessage(`Codex Pool Checkin Failed: ${e.message}`);
+        if (showError) {
+            vscode.window.showErrorMessage(`Codex Pool Checkin Failed: ${e.message}`);
+        }
         // We throw so caller can implement exponential backoff
         throw e;
     }

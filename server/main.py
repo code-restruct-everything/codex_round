@@ -19,7 +19,7 @@ from db import (
     update_account, pick_best_ready_account
 )
 from core import ensure_fresh_token, save_auth, get_auth_path, InvalidGrantError
-from scheduler import start_scheduler, remove_account
+from scheduler import start_scheduler, remove_account, checkin_account
 
 # API Key config
 VAULT_API_KEY = os.environ.get("VAULT_API_KEY", "default_secret_key_change_me")
@@ -123,35 +123,11 @@ class CheckinRequest(BaseModel):
 @app.post("/checkin/{account_id}", dependencies=[Depends(verify_api_key)])
 async def checkin(account_id: str, req: CheckinRequest):
     logger.info(f"Checking in account {account_id}")
-    acc = get_account(account_id)
-    if not acc:
+    try:
+        return await checkin_account(account_id, req.auth_json)
+    except KeyError:
         logger.warning(f"Checkin failed: Account {account_id} not found")
         raise HTTPException(status_code=404, detail="Account not found")
-        
-    # Save the auth_json provided by client
-    save_auth(account_id, req.auth_json)
-    
-    # Refresh to ensure it's fresh in our DB
-    try:
-        await ensure_fresh_token(account_id)
-    except Exception as e:
-        # If it fails, we still keep it, just log it. Client returned it anyway.
-        logger.warning(f"Could not refresh token on checkin for {account_id}: {e}")
-        
-    latest_acc = get_account(account_id)
-    next_status = "READY"
-    if latest_acc:
-        limit_pct = latest_acc["limit_pct"]
-        remaining_pct = latest_acc["remaining_pct"]
-        if latest_acc["rate_limit_reached"] or (limit_pct > 0 and remaining_pct >= 0 and (remaining_pct / limit_pct) < 0.3):
-            next_status = "COOLING"
-
-    update_account(account_id, {
-        "status": next_status,
-        "returned_at": datetime.now(timezone.utc).isoformat()
-    })
-    
-    return {"status": "ok"}
 
 class UsageUpdateRequest(BaseModel):
     remaining_pct: Optional[int] = None
@@ -185,7 +161,7 @@ async def update_usage(account_id: str, req: UsageUpdateRequest):
     if updates and "usage_updated_at" not in updates:
         updates["usage_updated_at"] = datetime.now(timezone.utc).isoformat()
 
-    if updates.get("rate_limit_reached") or updates.get("remaining_pct") == 0:
+    if acc["status"] not in ("IN_USE", "RETURNING") and (updates.get("rate_limit_reached") or updates.get("remaining_pct") == 0):
         updates["status"] = "COOLING"
 
     update_account(account_id, updates)

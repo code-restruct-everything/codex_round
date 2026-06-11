@@ -1,11 +1,21 @@
 import logging
+import asyncio
 from datetime import datetime, timezone
+from typing import Any, Dict
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from db import list_accounts, update_account, delete_account, get_account
-from core import ensure_fresh_token, InvalidGrantError, get_auth_path
+from core import ensure_fresh_token, InvalidGrantError, get_auth_path, save_auth
 from usage import fetch_usage_updates, InvalidUsageAccountError
 
 logger = logging.getLogger("vault.scheduler")
+checkin_locks: Dict[str, asyncio.Lock] = {}
+
+def get_checkin_lock(account_id: str) -> asyncio.Lock:
+    lock = checkin_locks.get(account_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        checkin_locks[account_id] = lock
+    return lock
 
 async def remove_account(account_id: str, reason: str):
     logger.warning(f"⚠️ 账号 {account_id} 已移除（原因：{reason}）")
@@ -14,6 +24,64 @@ async def remove_account(account_id: str, reason: str):
         auth_path.unlink()
     delete_account(account_id)
     # TODO: Send alert via email/slack
+
+async def checkin_account(account_id: str, auth_json: Dict[str, Any]):
+    async with get_checkin_lock(account_id):
+        acc = get_account(account_id)
+        if not acc:
+            logger.warning(f"Checkin failed: Account {account_id} not found")
+            raise KeyError(account_id)
+
+        if acc["status"] != "IN_USE":
+            logger.info(f"Account {account_id} already checked in with status {acc['status']}")
+            if acc["status"] == "RETURNING":
+                return await finalize_checkin_locked(account_id)
+            return {"status": "ok", "already_checked_in": True}
+
+        save_auth(account_id, auth_json)
+        update_account(account_id, {
+            "status": "RETURNING",
+            "returned_at": datetime.now(timezone.utc).isoformat()
+        })
+
+        return await finalize_checkin_locked(account_id)
+
+async def finalize_checkin(account_id: str):
+    async with get_checkin_lock(account_id):
+        return await finalize_checkin_locked(account_id)
+
+async def finalize_checkin_locked(account_id: str):
+    acc = get_account(account_id)
+    if not acc:
+        logger.warning(f"Could not finalize checkin for missing account {account_id}")
+        return {"status": "missing"}
+    if acc["status"] != "RETURNING":
+        logger.info(f"Account {account_id} does not need RETURNING recovery; status={acc['status']}")
+        return {"status": "ok", "already_checked_in": True}
+
+    try:
+        await ensure_fresh_token(account_id)
+    except Exception as e:
+        logger.warning(f"Could not refresh token on checkin for {account_id}: {e}")
+
+    latest_acc = get_account(account_id)
+    next_status = "READY"
+    if latest_acc:
+        limit_pct = latest_acc["limit_pct"]
+        remaining_pct = latest_acc["remaining_pct"]
+        if latest_acc["rate_limit_reached"] or (limit_pct > 0 and remaining_pct >= 0 and (remaining_pct / limit_pct) < 0.3):
+            next_status = "COOLING"
+
+    update_account(account_id, {"status": next_status})
+    logger.info(f"Account {account_id} finalized checkin as {next_status}")
+    return {"status": "ok"}
+
+async def recover_returning_accounts():
+    accounts = list_accounts()
+    for acc in accounts:
+        if acc["status"] == "RETURNING":
+            logger.info(f"Recovering RETURNING account {acc['account_id']}")
+            await finalize_checkin(acc["account_id"])
 
 async def heartbeat_account(account_id: str):
     logger.info(f"Running heartbeat for account {account_id}")
@@ -74,7 +142,10 @@ async def check_all_accounts():
                 
         elapsed_minutes = (now - last_hb).total_seconds() / 60 if last_hb else float('inf')
         
-        if status == "READY":
+        if status == "RETURNING":
+            await finalize_checkin(account_id)
+
+        elif status == "READY":
             ratio = remaining / limit if limit > 0 else 1.0
 
             should_heartbeat = False
@@ -108,7 +179,31 @@ async def check_all_accounts():
 
 def start_scheduler():
     scheduler = AsyncIOScheduler()
+    scheduler.add_job(
+        recover_returning_accounts,
+        'date',
+        run_date=datetime.now(timezone.utc),
+        id='recover_returning_accounts_startup',
+        replace_existing=True
+    )
+    scheduler.add_job(
+        recover_returning_accounts,
+        'interval',
+        minutes=1,
+        id='recover_returning_accounts',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True
+    )
     # Run check every 5 minutes
-    scheduler.add_job(check_all_accounts, 'interval', minutes=5)
+    scheduler.add_job(
+        check_all_accounts,
+        'interval',
+        minutes=5,
+        id='check_all_accounts',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True
+    )
     scheduler.start()
     logger.info("Scheduler started")
