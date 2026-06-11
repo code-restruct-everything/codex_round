@@ -54,10 +54,13 @@ async function ackCheckout(accountId, checkoutRequestId, showError = true) {
         throw e;
     }
 }
-async function checkinAccount(accountId, authJson, showError = true) {
+async function checkinAccount(accountId, authJson, checkoutRequestId, showError = true) {
     const client = getVaultClient();
     try {
-        await client.post(`/checkin/${accountId}`, { auth_json: authJson });
+        await client.post(`/checkin/${accountId}`, {
+            auth_json: authJson,
+            checkout_request_id: checkoutRequestId
+        });
         return true;
     }
     catch (e) {

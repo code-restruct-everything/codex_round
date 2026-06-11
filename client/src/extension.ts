@@ -136,8 +136,8 @@ async function performHeartbeat(): Promise<QuotaInfo | null> {
         if (quota.rate_limit_reached || (quota.remaining_pct !== undefined && quota.remaining_pct < 5 && quota.limit_pct !== -1)) {
             const accountToReturn = currentAccountId;
             vscode.window.showInformationMessage(`账号 ${currentAccountId} 额度即将耗尽，正在切换...`);
-            stopHeartbeatTimer();
             markCheckinPending(accountToReturn);
+            stopHeartbeatTimer();
             await checkinCurrentAccountWithRetry(accountToReturn);
             clearClientState();
             await performCheckout();
@@ -286,8 +286,8 @@ async function manualReturn() {
     }
 
     try {
-        stopHeartbeatTimer();
         markCheckinPending(currentAccountId);
+        stopHeartbeatTimer();
         await checkinCurrentAccountWithRetry(currentAccountId);
     } catch (e: any) {
         vscode.window.showErrorMessage(`归还账号失败：${e.message || e}`);

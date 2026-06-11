@@ -11,6 +11,26 @@ const os = require("os");
 const CODEX_DIR = path.join(os.homedir(), '.codex');
 const AUTH_JSON_PATH = path.join(CODEX_DIR, 'auth.json');
 const STATE_FILE_PATH = path.join(os.homedir(), '.codex-client-state.json');
+function atomicWriteFile(filePath, content) {
+    const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    let fd;
+    try {
+        fd = fs.openSync(tmpPath, 'w');
+        fs.writeFileSync(fd, content, 'utf-8');
+        fs.fsyncSync(fd);
+        fs.closeSync(fd);
+        fd = undefined;
+        fs.renameSync(tmpPath, filePath);
+    }
+    finally {
+        if (fd !== undefined) {
+            fs.closeSync(fd);
+        }
+        if (fs.existsSync(tmpPath)) {
+            fs.unlinkSync(tmpPath);
+        }
+    }
+}
 function readAuthJson() {
     try {
         if (!fs.existsSync(AUTH_JSON_PATH)) {
@@ -29,10 +49,11 @@ function writeAuthJson(auth) {
         if (!fs.existsSync(CODEX_DIR)) {
             fs.mkdirSync(CODEX_DIR, { recursive: true });
         }
-        fs.writeFileSync(AUTH_JSON_PATH, JSON.stringify(auth, null, 2), 'utf-8');
+        atomicWriteFile(AUTH_JSON_PATH, JSON.stringify(auth, null, 2));
     }
     catch (e) {
         console.error('Failed to write auth.json', e);
+        throw e;
     }
 }
 function readClientState() {
@@ -50,10 +71,11 @@ function readClientState() {
 }
 function writeClientState(state) {
     try {
-        fs.writeFileSync(STATE_FILE_PATH, JSON.stringify(state, null, 2), 'utf-8');
+        atomicWriteFile(STATE_FILE_PATH, JSON.stringify(state, null, 2));
     }
     catch (e) {
         console.error('Failed to write client state', e);
+        throw e;
     }
 }
 function clearClientState() {
@@ -64,6 +86,7 @@ function clearClientState() {
     }
     catch (e) {
         console.error('Failed to clear client state', e);
+        throw e;
     }
 }
 //# sourceMappingURL=utils.js.map

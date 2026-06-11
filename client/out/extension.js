@@ -24,7 +24,15 @@ async function activate(context) {
         vscode.window.showInformationMessage(`Codex Pool Status: Current Account - ${currentAccountId || 'None'}`);
     }));
     const state = (0, utils_1.readClientState)();
-    if (state?.current_account_id) {
+    if (state?.pending_checkin_account_id) {
+        currentAccountId = state.pending_checkin_account_id;
+        updateStatusBar({ account_id: currentAccountId, status: '恢复归还中...' });
+        stopHeartbeatTimer();
+        await checkinCurrentAccountWithRetry(currentAccountId);
+        (0, utils_1.clearClientState)();
+        await performCheckout();
+    }
+    else if (state?.current_account_id) {
         currentAccountId = state.current_account_id;
         updateStatusBar({ account_id: currentAccountId, status: '恢复中...' });
     }
@@ -76,7 +84,9 @@ async function performCheckout() {
     await ackCheckoutWithRetry(currentAccountId, checkoutRequestId);
     (0, utils_1.writeClientState)({
         current_account_id: currentAccountId,
-        checked_out_at: new Date().toISOString()
+        checked_out_at: new Date().toISOString(),
+        checkout_request_id: checkoutRequestId,
+        checkout_started_at: checkoutStartedAt
     });
 }
 async function performHeartbeat() {
@@ -90,7 +100,12 @@ async function performHeartbeat() {
     const quota = await (0, heartbeat_1.runClientHeartbeat)(auth);
     if (quota.banned) {
         vscode.window.showErrorMessage(`账号 ${currentAccountId} 已失效或被封禁，正在切换...`);
-        await (0, vaultApi_1.deleteAccount)(currentAccountId);
+        stopHeartbeatTimer();
+        const deleted = await (0, vaultApi_1.deleteAccount)(currentAccountId);
+        if (!deleted) {
+            updateStatusBar({ account_id: currentAccountId, status: '隔离失败，停止切换' });
+            return null;
+        }
         (0, utils_1.clearClientState)();
         await performCheckout();
         return null;
@@ -113,6 +128,7 @@ async function performHeartbeat() {
             const accountToReturn = currentAccountId;
             vscode.window.showInformationMessage(`账号 ${currentAccountId} 额度即将耗尽，正在切换...`);
             stopHeartbeatTimer();
+            markCheckinPending(accountToReturn);
             await checkinCurrentAccountWithRetry(accountToReturn);
             (0, utils_1.clearClientState)();
             await performCheckout();
@@ -181,11 +197,17 @@ function stopHeartbeatTimer() {
 }
 async function checkinCurrentAccountWithRetry(accountId) {
     let attempt = 0;
+    const state = (0, utils_1.readClientState)();
+    const checkoutRequestId = state?.pending_checkin_checkout_request_id || state?.checkout_request_id;
+    if (!checkoutRequestId) {
+        updateStatusBar({ account_id: accountId, status: '租约缺失，停止归还' });
+        throw new Error(`Missing checkout_request_id for account ${accountId}; refusing unsafe checkin.`);
+    }
     while (true) {
         const latestAuth = (0, utils_1.readAuthJson)();
         if (latestAuth) {
             try {
-                await (0, vaultApi_1.checkinAccount)(accountId, latestAuth, false);
+                await (0, vaultApi_1.checkinAccount)(accountId, latestAuth, checkoutRequestId, false);
                 vscode.window.showInformationMessage(`成功归还账号: ${accountId}`);
                 return;
             }
@@ -204,6 +226,22 @@ async function checkinCurrentAccountWithRetry(accountId) {
         await sleep(delayMs);
     }
 }
+function markCheckinPending(accountId) {
+    const state = (0, utils_1.readClientState)();
+    const checkoutRequestId = state?.checkout_request_id;
+    if (!checkoutRequestId) {
+        throw new Error(`Missing checkout_request_id for account ${accountId}; refusing unsafe checkin.`);
+    }
+    (0, utils_1.writeClientState)({
+        current_account_id: accountId,
+        checked_out_at: state?.checked_out_at,
+        checkout_request_id: checkoutRequestId,
+        checkout_started_at: state?.checkout_started_at,
+        pending_checkin_account_id: accountId,
+        pending_checkin_checkout_request_id: checkoutRequestId,
+        checkin_started_at: new Date().toISOString()
+    });
+}
 function getCheckinRetryDelay(attempt) {
     return CHECKIN_RETRY_DELAYS_MS[Math.min(attempt - 1, CHECKIN_RETRY_DELAYS_MS.length - 1)];
 }
@@ -219,19 +257,20 @@ async function manualReturn() {
         return;
     }
     const auth = (0, utils_1.readAuthJson)();
-    if (auth) {
-        try {
-            await (0, vaultApi_1.checkinAccount)(currentAccountId, auth);
-            vscode.window.showInformationMessage(`成功归还账号: ${currentAccountId}`);
-        }
-        catch (e) {
-            vscode.window.showErrorMessage("归还账号失败。");
-            return;
-        }
+    if (!auth) {
+        vscode.window.showErrorMessage("本地 auth.json 丢失，无法安全归还账号。");
+        return;
+    }
+    try {
+        stopHeartbeatTimer();
+        markCheckinPending(currentAccountId);
+        await checkinCurrentAccountWithRetry(currentAccountId);
+    }
+    catch (e) {
+        vscode.window.showErrorMessage(`归还账号失败：${e.message || e}`);
+        return;
     }
     (0, utils_1.clearClientState)();
-    if (heartbeatTimer)
-        clearTimeout(heartbeatTimer);
     await performCheckout();
 }
 function deactivate() {
