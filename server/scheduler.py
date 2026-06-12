@@ -162,7 +162,15 @@ async def heartbeat_account(account_id: str):
         limit = updates.get("limit_pct")
         if updates.get("rate_limit_reached") or remaining == 0 or (limit and limit > 0 and remaining is not None and remaining >= 0 and (remaining / limit) < 0.3):
             updates["status"] = "COOLING"
-        logger.debug(f"Account {account_id} usage heartbeat OK")
+        five_hour = updates.get("five_hour_percent_left")
+        weekly = updates.get("weekly_percent_left")
+        rate_limited = updates.get("rate_limit_reached")
+        next_status = updates.get("status", latest_acc["status"])
+        logger.info(
+            f"Heartbeat OK [{account_id}] "
+            f"5h={five_hour}% weekly={weekly}% "
+            f"rate_limited={rate_limited} → {next_status}"
+        )
         update_account(account_id, updates)
 
 async def check_all_accounts():
