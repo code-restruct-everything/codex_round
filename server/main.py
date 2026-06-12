@@ -10,7 +10,8 @@ import logging
 _log_level = getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO)
 logging.basicConfig(
     level=_log_level,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    force=True
 )
 logger = logging.getLogger("vault.main")
 

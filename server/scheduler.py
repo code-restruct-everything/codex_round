@@ -176,6 +176,7 @@ async def heartbeat_account(account_id: str):
 async def check_all_accounts():
     accounts = list_accounts()
     now = datetime.now(timezone.utc)
+    logger.info(f"Scheduler scan: {len(accounts)} accounts")
     
     for acc in accounts:
         account_id = acc["account_id"]
