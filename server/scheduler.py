@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from db import list_accounts, update_account, get_account
-from core import ensure_fresh_token, InvalidGrantError, save_auth, backup_auth
+from core import ensure_fresh_token, refresh_token, load_auth, InvalidGrantError, save_auth, backup_auth
 from usage import fetch_usage_updates, InvalidUsageAccountError
 
 logger = logging.getLogger("vault.scheduler")
@@ -119,28 +119,31 @@ async def heartbeat_account(account_id: str):
             logger.info(f"Skipping heartbeat for {account_id}; status changed to {acc['status'] if acc else 'missing'}")
             return
 
-        try:
-            auth = await ensure_fresh_token(account_id)
-        except InvalidGrantError:
-            await remove_account(account_id, reason="refresh_token invalid")
-            return
-        except Exception as e:
-            logger.error(f"Error refreshing token for {account_id}: {e}")
-            return
-
+        auth = load_auth(account_id)
         try:
             updates = await fetch_usage_updates(auth)
+        except PermissionError:
+            try:
+                auth = await refresh_token(account_id)
+            except InvalidGrantError:
+                await remove_account(account_id, reason="refresh_token invalid")
+                return
+            except Exception as e:
+                logger.error(f"Error refreshing token for {account_id}: {e}")
+                return
+            try:
+                updates = await fetch_usage_updates(auth)
+            except PermissionError:
+                logger.warning(f"Account {account_id} got 401 from /wham/usage after token refresh, will retry next cycle")
+                latest_acc = get_account(account_id)
+                if latest_acc and latest_acc["status"] in ("READY", "COOLING"):
+                    update_account(account_id, {
+                        "last_heartbeat_at": datetime.now(timezone.utc).isoformat(),
+                        "usage_error": "usage_401_after_refresh",
+                    })
+                return
         except InvalidUsageAccountError:
             await remove_account(account_id, reason="account banned (403 from /wham/usage)")
-            return
-        except PermissionError:
-            logger.warning(f"Account {account_id} got 401 from /wham/usage after token refresh, will retry next cycle")
-            latest_acc = get_account(account_id)
-            if latest_acc and latest_acc["status"] in ("READY", "COOLING"):
-                update_account(account_id, {
-                    "last_heartbeat_at": datetime.now(timezone.utc).isoformat(),
-                    "usage_error": "usage_401_after_refresh",
-                })
             return
         except Exception as e:
             logger.error(f"Usage fetch error during heartbeat for {account_id}: {e}")

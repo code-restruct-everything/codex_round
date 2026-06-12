@@ -116,20 +116,15 @@ async def refresh_token(account_id: str) -> Dict[str, Any]:
     logger.info(f"Successfully refreshed token for account {account_id}")
     data = resp.json()
     auth["access_token"] = data["access_token"]
-    # Provide camelCase too just in case older clients expect it
-    auth["accessToken"] = data["access_token"]
     if "tokens" in auth:
         auth["tokens"]["access_token"] = data["access_token"]
-    
-    # Rotation: check if a new refresh token is provided
+
     if "refresh_token" in data:
         auth["refresh_token"] = data["refresh_token"]
-        auth["refreshToken"] = data["refresh_token"]
         if "tokens" in auth:
             auth["tokens"]["refresh_token"] = data["refresh_token"]
-        
+
     auth["expiresAt"] = time.time() + data.get("expires_in", 3600)
-    auth["expires_in"] = time.time() + data.get("expires_in", 3600)
     auth["last_refresh"] = datetime.now(timezone.utc).isoformat()
 
     save_auth(account_id, auth)
